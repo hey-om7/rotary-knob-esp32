@@ -1,6 +1,9 @@
 #ifndef ROTARY_CODE_LOGIC
 #define ROTARY_CODE_LOGIC
 
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Wire.h>
 
 // --- OLED Configuration ---
 #define SCREEN_WIDTH 128
@@ -24,6 +27,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 volatile int counter = 0;
 volatile int lastClk = HIGH;
 volatile unsigned long lastButtonPress = 0;
+volatile bool buttonPressed = false; 
 
 int lastDisplayedCounter = -9999; // Force initial screen update
 
@@ -49,7 +53,7 @@ void IRAM_ATTR readButton() {
   unsigned long currentTime = millis();
   // 200ms debounce to prevent multiple triggers from one press
   if (currentTime - lastButtonPress > 200) { 
-    counter = 0; // Reset the counter to 0 on button press
+    buttonPressed = true; // Signal that the button was pressed
     lastButtonPress = currentTime;
   }
 }
@@ -74,7 +78,6 @@ void initRotary(){
   delay(1500);
 
   // 3. Setup Encoder Pins
-  // Using INPUT_PULLUP in case your encoder module doesn't have built-in pull-up resistors
   pinMode(ENCODER_CLK, INPUT_PULLUP);
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
@@ -82,7 +85,6 @@ void initRotary(){
   lastClk = digitalRead(ENCODER_CLK);
 
   // 4. Attach Interrupts
-  // This tells the ESP32 to monitor these pins automatically in the background
   attachInterrupt(digitalPinToInterrupt(ENCODER_CLK), readEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_SW), readButton, FALLING);
 }
