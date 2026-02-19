@@ -7,13 +7,15 @@
 #include <EEPROM.h>
 #include <WebServer.h>
 
-// Define the server object here so it actually exists in memory
-// This fixes the "undefined reference" error
-#ifndef SERVER_DEFINITION
-#define SERVER_DEFINITION
-WebServer server(80); 
-#endif
+#define EEPROM_SIZE 1024
 
 const char* ipServer = "192.168.1.100";
-// URL is better built dynamically to ensure it has the latest MAC
+
+const String versionCheckBaseUrl = "http://" + String(ipServer) + ":8080/api/v1/device/firmware/version?macAddress=" ;
+const String firmwareBinBaseUrl = "http://" + String(ipServer) +":8080/api/v1/device/firmware?macAddress=";
+const String baseLoggingUrl = "http://" + String(ipServer) + ":8080/api/v1/device/logs";
+
+WebServer server(80); 
+
+
 #endif

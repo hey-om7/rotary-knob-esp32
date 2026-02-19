@@ -22,7 +22,6 @@ void connectToWiFi() {
   WiFi.begin(); // This attempts to connect using credentials stored in NVS automatically
 
   Serial.println("Attempting to connect to saved WiFi...");
-  Serial.println("Connecting to WiFi: " + ssid);
   unsigned long startAttempt = millis();
   
   // Wait 10 seconds to see if it connects automatically
