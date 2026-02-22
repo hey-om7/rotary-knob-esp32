@@ -23,22 +23,21 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define ENCODER_SW  4
 
 // --- Variables ---
-// Marked 'volatile' because they are modified inside Interrupt Service Routines (ISRs)
 volatile int counter = 0;
 volatile int lastClk = HIGH;
-volatile unsigned long lastButtonPress = 0;
-volatile bool buttonPressed = false; 
 
-int lastDisplayedCounter = -9999; // Force initial screen update
+volatile unsigned long buttonDownTime = 0;
+volatile bool buttonPressed = false;     // Short press flag
+volatile bool buttonLongPressed = false; // Long press flag
+
+int lastDisplayedCounter = -9999; 
 
 // --- Interrupt Service Routine for Encoder ---
-// IRAM_ATTR keeps the function in RAM for fast execution on ESP32
 void IRAM_ATTR readEncoder() {
   int clkValue = digitalRead(ENCODER_CLK);
   int dtValue = digitalRead(ENCODER_DT);
   
   if (clkValue != lastClk) {
-    // Determine direction by comparing CLK and DT states
     if (clkValue != dtValue) {
       counter++;
     } else {
@@ -50,25 +49,34 @@ void IRAM_ATTR readEncoder() {
 
 // --- Interrupt Service Routine for Button ---
 void IRAM_ATTR readButton() {
+  int btnState = digitalRead(ENCODER_SW);
   unsigned long currentTime = millis();
-  // 200ms debounce to prevent multiple triggers from one press
-  if (currentTime - lastButtonPress > 200) { 
-    buttonPressed = true; // Signal that the button was pressed
-    lastButtonPress = currentTime;
+  
+  if (btnState == LOW) { 
+    // Button pressed down
+    buttonDownTime = currentTime;
+  } else { 
+    // Button released
+    unsigned long pressDuration = currentTime - buttonDownTime;
+    
+    // Determine press type based on duration
+    if (pressDuration >= 2000) { 
+      buttonLongPressed = true;
+    } else if (pressDuration > 50) { 
+      // 50ms minimum to debounce noisy hardware signals
+      buttonPressed = true; 
+    }
   }
 }
 
 void initRotary(){
-   // 1. Initialize custom I2C pins for the ESP32-C3
   Wire.begin(I2C_SDA, I2C_SCL);
 
-  // 2. Initialize the OLED display
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed. Check wiring!"));
-    for(;;); // Halt execution if OLED is not found
+    for(;;); 
   }
   
-  // Show startup screen
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -77,16 +85,16 @@ void initRotary(){
   display.display();
   delay(1500);
 
-  // 3. Setup Encoder Pins
   pinMode(ENCODER_CLK, INPUT_PULLUP);
   pinMode(ENCODER_DT, INPUT_PULLUP);
   pinMode(ENCODER_SW, INPUT_PULLUP);
 
   lastClk = digitalRead(ENCODER_CLK);
 
-  // 4. Attach Interrupts
   attachInterrupt(digitalPinToInterrupt(ENCODER_CLK), readEncoder, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_SW), readButton, FALLING);
+  
+  // CRITICAL FIX: Track CHANGE (both press and release) instead of just FALLING
+  attachInterrupt(digitalPinToInterrupt(ENCODER_SW), readButton, CHANGE);
 }
 
 #endif
