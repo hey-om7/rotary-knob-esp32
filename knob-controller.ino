@@ -6,6 +6,7 @@
 #include <Adafruit_SSD1306.h>
 #include <time.h>
 #include <WebServer.h>
+#include "globals.h"
 WebServer server(80); 
 
 // Order matters: Include rotary before your main logic so 'display' is available
@@ -37,7 +38,6 @@ int menuSelection     = 0;
 int lastMenuSelection = -1;
 
 // --- Standby Tracking ---
-#define STANDBY_TIMEOUT_MS 6000UL
 unsigned long lastActivityTime  = 0;
 unsigned long lastStandbyUpdate = 0;
 int lastStandbyCounter          = 0;

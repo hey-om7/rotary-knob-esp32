@@ -2,11 +2,11 @@
 #define BLE_LOGIC_H
 
 #include <BleKeyboard.h>
+#include "globals.h"
 
 BleKeyboard bleKeyboard("ESP32-C3 Knob", "Domestic Labs", 100);
 
 unsigned long lastKeySendTime = 0;
-const unsigned long keyInterval = 5000; // 5 seconds
 
 void initBLE() {
   bleKeyboard.begin();
@@ -25,7 +25,7 @@ char generateRandomLetter() {
 
 void handleWakeModeLogic() {
   if (bleKeyboard.isConnected()) { 
-    if (millis() - lastKeySendTime >= keyInterval) { 
+    if (millis() - lastKeySendTime >= wakeModeKeyInterval) { 
       char randomLetter = generateRandomLetter();
       
       bleKeyboard.write(randomLetter);

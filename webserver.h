@@ -33,10 +33,10 @@ inline void handleRestart() {
 
 inline void initWebserver() {
   // Start mDNS
-  if (!MDNS.begin("knobcontroller")) {     // hostname = knobcontroller.local
+  if (!MDNS.begin(hostname)) {     // hostname = knobcontroller.local
     Serial.println("Error setting up MDNS!");
   } else {
-    Serial.println("mDNS responder started: http://knobcontroller.local");
+    Serial.println("mDNS responder started: http://"+hostname+".local");
   }
 
   // Register API endpoint
