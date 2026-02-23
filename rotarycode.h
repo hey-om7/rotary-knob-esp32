@@ -78,10 +78,13 @@ void initRotary(){
   }
   
   display.clearDisplay();
-  display.setTextSize(1);
+  display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(10, 25);
-  display.println("ESP32-C3 Ready!");
+  display.println("Knobby OS");
+  display.setTextSize(1);
+  display.setCursor(10, 50);
+  display.println("Initializing...");
   display.display();
   delay(1500);
 

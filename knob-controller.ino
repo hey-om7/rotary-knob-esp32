@@ -1,9 +1,12 @@
 #include "connectwifilogic.h"
 #include "autoupdatelogic.h"
+#include "webserver.h"
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <time.h>
+#include <WebServer.h>
+WebServer server(80); 
 
 // Order matters: Include rotary before your main logic so 'display' is available
 #include "rotarycode.h"
@@ -56,38 +59,25 @@ bool beepState = false;
 // =============================================================
 
 // ── WiFi icon ─────────────────────────────────────────────────
+
+// 'wifi-icon', 30x30px
+const unsigned char epd_bitmap_wifi_icon [] PROGMEM = {
+	0x03, 0x80, 0x0f, 0xf0, 0x3f, 0xfc, 0xfc, 0x3f, 0x61, 0x8e, 0x0f, 0xf0, 0x1f, 0xf8, 0x0e, 0x70, 
+	0x00, 0x00, 0x03, 0xc0, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
 // Classic 3-arc + dot symbol.
 // cx, cy = centre of the arc system (dot position).
 // connected = all 3 arcs;  disconnected = 1 small arc only.
 void drawWifiIcon(int cx, int cy, bool connected) {
-  // 1. Draw a larger central dot (radius 3 instead of 2)
-  display.fillCircle(cx, cy, 3, SSD1306_WHITE);
-
-  // 2. Draw the thick arcs
   if (connected) {
-    // Inner thick arc: Draw three consecutive thin arcs to create thickness
-    for (int r = 7; r <= 9; r++) {
-      display.drawCircleHelper(cx, cy, r, 0x03, SSD1306_WHITE);
+    display.drawBitmap(cx, cy, epd_bitmap_wifi_icon, 16, 16, SSD1306_WHITE);
+  } 
+    // Visual indicator for "not paired"
+    // Draws a diagonal strike-through to indicate disconnection
+    if(!connected){
+      display.drawLine(cx+2, cy + 12, cx + 10, cy, SSD1306_WHITE);
     }
-    // Outer thick arc: Draw another set of three thin arcs
-    for (int r = 13; r <= 15; r++) {
-      display.drawCircleHelper(cx, cy, r, 0x03, SSD1306_WHITE);
-    }
-  } else {
-    // For "not connected", draw only the inner thick arc and the dot
-    for (int r = 7; r <= 9; r++) {
-      display.drawCircleHelper(cx, cy, r, 0x03, SSD1306_WHITE);
-    }
-  }
-
-  // 3. Masking: Slice off the sides to create the cone shape.
-  // We need larger masks to cover the new, thicker, and wider arcs.
-  // The mask starts just above the central dot (cy - 3) so it doesn't cut it.
-  display.fillTriangle(cx, cy - 3, cx - 22, cy - 3, cx - 22, cy - 25, SSD1306_BLACK);
-  display.fillTriangle(cx, cy - 3, cx + 22, cy - 3, cx + 22, cy - 25, SSD1306_BLACK);
-
-  // 4. Redraw the center dot last to ensure it's perfectly clean on top
-  display.fillCircle(cx, cy, 3, SSD1306_WHITE);
 }
 
 // ── Bluetooth icon ────────────────────────────────────────────
@@ -139,7 +129,7 @@ void drawStandbyScreen() {
   bool btOn   = bleKeyboard.isConnected();
 
   // WiFi: arc system with dot at (14, 14) → arcs open upward
-  drawWifiIcon(14, 14, wifiOn);
+  drawWifiIcon(90, 1, wifiOn);
 
   // BT: 12×18 box anchored top-right: x = 128-16 = 112, y = 0
   drawBTIcon(112, 0, btOn);
@@ -345,6 +335,7 @@ void setup() {
   initOTA();
   connectToWiFi();
   checkForOTAUpdate();
+  initWebserver();
 
   configTime(UTC_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
   Serial.println("Waiting for NTP time sync...");
@@ -366,7 +357,7 @@ void setup() {
 // MAIN LOOP
 // =============================================================
 void loop() {
-
+  server.handleClient();
   // ── Long-press: always return to Main Menu ────────────────
   if (buttonLongPressed) {
     buttonLongPressed = false;
