@@ -321,6 +321,10 @@ void drawTimerEndedScreen() {
   display.display();
 }
 
+// --- UI Buzzer Variables ---
+unsigned long uiBuzzerEndTime = 0;
+bool uiBuzzerActive = false;
+
 // =============================================================
 // SETUP
 // =============================================================
@@ -358,6 +362,32 @@ void setup() {
 // =============================================================
 void loop() {
   server.handleClient();
+
+  // ── NON-BLOCKING UI BUZZER LOGIC ────────────────────────────
+  // 1. Trigger the buzzer if a button is pressed (and we aren't in the alarm state)
+  if (currentState != STATE_TIMER_ENDED) {
+    if (buttonLongPressed && !uiBuzzerActive) {
+      digitalWrite(BUZZER_PIN, HIGH);
+      uiBuzzerEndTime = millis() + 150; // 150ms for a long press
+      uiBuzzerActive = true;
+    } 
+    else if (buttonPressed && !uiBuzzerActive) {
+      digitalWrite(BUZZER_PIN, HIGH);
+      uiBuzzerEndTime = millis() + 40;  // 40ms for a quick, snappy click
+      uiBuzzerActive = true;
+    }
+  }
+
+  // 2. Turn the buzzer off once the time has expired
+  if (uiBuzzerActive && millis() >= uiBuzzerEndTime) {
+    uiBuzzerActive = false;
+    // Safety check: ensure the alarm hasn't triggered in the exact same millisecond
+    if (currentState != STATE_TIMER_ENDED) {
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+  }
+  // ────────────────────────────────────────────────────────────
+
   // ── Long-press: always return to Main Menu ────────────────
   if (buttonLongPressed) {
     buttonLongPressed = false;

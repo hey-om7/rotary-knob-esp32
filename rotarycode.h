@@ -53,18 +53,23 @@ void IRAM_ATTR readButton() {
   unsigned long currentTime = millis();
   
   if (btnState == LOW) { 
-    // Button pressed down
-    buttonDownTime = currentTime;
+    // Only record the time if a press isn't already being tracked
+    if (buttonDownTime == 0) {
+      buttonDownTime = currentTime;
+    }
   } else { 
-    // Button released
-    unsigned long pressDuration = currentTime - buttonDownTime;
-    
-    // Determine press type based on duration
-    if (pressDuration >= 2000) { 
-      buttonLongPressed = true;
-    } else if (pressDuration > 50) { 
-      // 50ms minimum to debounce noisy hardware signals
-      buttonPressed = true; 
+    // Button fully released
+    if (buttonDownTime > 0) {
+      unsigned long pressDuration = currentTime - buttonDownTime;
+      
+      if (pressDuration >= 2000) { 
+        buttonLongPressed = true;
+      } else if (pressDuration > 20) { // Lowered to 20ms for quick taps
+        buttonPressed = true; 
+      }
+      
+      // Reset the timer so it's ready for the next press
+      buttonDownTime = 0; 
     }
   }
 }
