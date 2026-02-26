@@ -75,23 +75,7 @@ void IRAM_ATTR readButton() {
 }
 
 void initRotary(){
-  Wire.begin(I2C_SDA, I2C_SCL);
-
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 allocation failed. Check wiring!"));
-    for(;;); 
-  }
   
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(10, 25);
-  display.println("Knobby OS");
-  display.setTextSize(1);
-  display.setCursor(10, 50);
-  display.println("Initializing...");
-  display.display();
-  delay(1500);
 
   pinMode(ENCODER_CLK, INPUT_PULLUP);
   pinMode(ENCODER_DT, INPUT_PULLUP);

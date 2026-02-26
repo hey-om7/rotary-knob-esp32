@@ -3,6 +3,7 @@
 
 #include "globals.h"
 #include "customHttpLogging.h"
+#include "oled_disply.h"
 
 // EEPROM address to store version string
 #define VERSION_ADDR 64
@@ -128,6 +129,7 @@ inline void checkForOTAUpdate() {
             break;
           case HTTP_UPDATE_OK:
             saveVersionToEEPROM(latestVersion);
+            updatingFirmwareScreen();
             printLog("OTA: Update successful. Rebooting...");
             delay(500);
             ESP.restart();
