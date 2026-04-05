@@ -25,13 +25,15 @@ const String hostname = "knobcontroller"; // For mDNS: http://knobcontroller.loc
 // --- State Machine Definitions ---
 enum AppState {
   STATE_MENU,
-  STATE_STANDBY,       // Auto-activates after 1 min idle on menu
+  STATE_STANDBY,       // Auto-activates after idle
   STATE_VOLUME,
   STATE_WAKE,
   STATE_TIMER_SET,
   STATE_TIMER_RUNNING,
   STATE_TIMER_PAUSED,
-  STATE_TIMER_ENDED
+  STATE_TIMER_ENDED,
+  STATE_ANIMATING_TO_STANDBY,
+  STATE_ANIMATING_WAKE
 };
 
 AppState currentState = STATE_MENU;
@@ -47,5 +49,16 @@ int lastTimerMinutes  = -1;
 unsigned long timerEndTime         = 0;
 unsigned long timerRemainingMillis = 0;
 
+// --- Standby Tracking ---
+bool enteredStandbyFromVolume = false;
+
+// --- Animation Tracking ---
+int animYOffset = 0;
+unsigned long animLastFrameTime = 0;
+AppState postAnimState = STATE_STANDBY;
+AppState preAnimState  = STATE_MENU;
+int volumeAnimIndicator = 0;
+unsigned long volumeAnimTimer = 0;
+unsigned long lastVolAnimFrameTime = 0;
 
 #endif

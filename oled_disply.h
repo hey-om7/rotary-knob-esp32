@@ -71,6 +71,26 @@ inline void drawBTIcon(int x, int y, bool paired) {
   }
 }
 
+// ── Sound icon ────────────────────────────────────────────────
+inline void drawSoundIcon(int x, int y) {
+  int leftX = x + 2;
+  int topY = y + 4;
+  int height = 6;
+  int width = 3;
+
+  // Base box
+  display.fillRect(leftX, topY, width, height, SSD1306_WHITE);
+  // Speaker cone
+  display.fillTriangle(leftX + width, topY + height / 2,
+                       leftX + width + 5, topY - 3,
+                       leftX + width + 5, topY + height + 2,
+                       SSD1306_WHITE);
+  // Sound wave 1
+  display.drawFastVLine(leftX + width + 8, topY, 6, SSD1306_WHITE);
+  // Sound wave 2
+  display.drawFastVLine(leftX + width + 11, topY - 2, 10, SSD1306_WHITE);
+}
+
 // =============================================================
 // STANDBY SCREEN
 // 128×64 layout:
@@ -80,59 +100,58 @@ inline void drawBTIcon(int x, int y, bool paired) {
 //   y  46-53 → AM/PM  textSize(1) — centred
 //   y  56-63 → "Www, DD Mmm"  textSize(1) — centred
 // =============================================================
-inline void drawStandbyScreen() {
+inline void drawStandbyScreen(int yOffset = 0, bool commit = true) {
   struct tm timeinfo;
   bool timeValid = getLocalTime(&timeinfo);
 
-  display.clearDisplay();
+  if (commit) display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
   // ── Status icons ──────────────────────────────────────
   bool wifiOn = (WiFi.status() == WL_CONNECTED);
   bool btOn   = bleKeyboard.isConnected();
 
+  if (enteredStandbyFromVolume) {
+    drawSoundIcon(68, 1 + yOffset);
+  }
+
   // WiFi: arc system with dot at (14, 14) → arcs open upward
-  drawWifiIcon(90, 1, wifiOn);
+  drawWifiIcon(90, 1 + yOffset, wifiOn);
 
   // BT: 12×18 box anchored top-right: x = 128-16 = 112, y = 0
-  drawBTIcon(112, 0, btOn);
+  drawBTIcon(112, 0 + yOffset, btOn);
 
   // Separator
-  display.drawFastHLine(0, 17, 128, SSD1306_WHITE);
+  display.drawFastHLine(0, 17 + yOffset, 128, SSD1306_WHITE);
 
   // ── Clock & date ──────────────────────────────────────
   if (!timeValid) {
     display.setTextSize(2);
-    display.setCursor(16, 28);
+    display.setCursor(16, 28 + yOffset);
     display.print("No Time");
     display.setTextSize(1);
-    display.setCursor(18, 54);
+    display.setCursor(18, 54 + yOffset);
     display.print("(WiFi needed)");
   } else {
-    // Time — 12-hour format, zero-padded → always 5 chars "HH:MM"
-    // textSize(3): char width=18px, height=24px
-    // 5 chars × 18px = 90px  →  x = (128-90)/2 = 19
     char timeBuf[6];
     strftime(timeBuf, sizeof(timeBuf), "%I:%M", &timeinfo);
     display.setTextSize(3);
-    display.setCursor(19, 20+5);
+    display.setCursor(19, 20+5 + yOffset);
     display.print(timeBuf);
 
-    // AM/PM — textSize(1): 2 chars × 6px = 12px  →  x = (128-12)/2 = 58
     char ampm[3];
     strftime(ampm, sizeof(ampm), "%p", &timeinfo);
     display.setTextSize(1);
-    display.setCursor(110, 34+5);
+    display.setCursor(110, 34+5 + yOffset);
     display.print(ampm);
 
-    // Date — "Mon, 23 Feb" = 11 chars × 6px = 66px  →  x = (128-66)/2 = 31
     char dateBuf[16];
     strftime(dateBuf, sizeof(dateBuf), "%a, %d %b", &timeinfo);
-    display.setCursor(31, 56);
+    display.setCursor(31, 56 + yOffset);
     display.print(dateBuf);
   }
 
-  display.display();
+  if (commit) display.display();
 }
 
 // =============================================================
@@ -149,17 +168,17 @@ inline void drawStandbyScreen() {
 //   y  34-41 → item 2
 //   y  48-55 → item 3
 // =============================================================
-inline void drawMenu() {
-  display.clearDisplay();
+inline void drawMenu(int yOffset = 0, bool commit = true) {
+  if (commit) display.clearDisplay();
 
   // ── Header ────────────────────────────────────────────
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   // "MAIN MENU" = 9 chars × 12px = 108px  →  x = (128-108)/2 = 10
-  display.setCursor(10, 0);
+  display.setCursor(10, 0 + yOffset);
   display.print("MAIN MENU");
 
-  display.drawFastHLine(0, 16, 128, SSD1306_WHITE);
+  display.drawFastHLine(0, 16 + yOffset, 128, SSD1306_WHITE);
 
   // ── Items ─────────────────────────────────────────────
   const char* labels[3] = { "1. Volume Knob", "2. Wake Mode", "3. Timer" };
@@ -168,17 +187,17 @@ inline void drawMenu() {
   display.setTextSize(1);
   for (int i = 0; i < 3; i++) {
     if (menuSelection == i) {
-      display.fillRect(0, yPos[i] - 1, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, yPos[i] - 1 + yOffset, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
     } else {
       display.setTextColor(SSD1306_WHITE);
     }
-    display.setCursor(6, yPos[i]);
+    display.setCursor(6, yPos[i] + yOffset);
     display.print(labels[i]);
   }
 
   display.setTextColor(SSD1306_WHITE);
-  display.display();
+  if (commit) display.display();
 }
 
 // =============================================================
@@ -197,16 +216,82 @@ inline void drawWelcomeScreen(){
   display.display();
 }
 
-inline void drawVolumeScreen() {
-  display.clearDisplay();
+inline void drawArc(int cx, int cy, int radius, int startDeg, int endDeg, int thickness) {
+  for (int r = radius; r < radius + thickness; r++) {
+     for (int a = startDeg; a <= endDeg; a += 2) {
+        float rad = a * PI / 180.0;
+        display.drawPixel(cx + cos(rad) * r, cy + sin(rad) * r, SSD1306_WHITE);
+     }
+  }
+}
+
+inline void drawVolumeScreen(int yOffset = 0, bool commit = true) {
+  if (commit) display.clearDisplay();
+  
+  // Minimal contextual text
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("< Back (Press Btn)");
-  display.setTextSize(2);
-  display.setCursor(20, 28);
-  display.println("VOLUME");
-  display.display();
+  display.setCursor(0, 0 + yOffset);
+  display.println("< Back");
+
+  int cx = 64;
+  int cy = 34 + yOffset;
+
+  // Traditional side-facing speaker icon
+  int rW = 8;  // Rectangle width
+  int rH = 12; // Rectangle height
+  int cW = 12; // Cone width
+  int cH = 26; // Cone height
+  int sX = cx - (rW + cW) / 2; // Leftmost X
+
+  // Speaker base rectangle
+  display.fillRect(sX, cy - rH / 2, rW, rH, SSD1306_WHITE);
+
+  // Speaker cone (drawn as two triangles to form a trapezoid connecting to base)
+  display.fillTriangle(sX + rW, cy - rH / 2,
+                       sX + rW, cy + rH / 2,
+                       sX + rW + cW, cy - cH / 2, SSD1306_WHITE);
+  display.fillTriangle(sX + rW, cy + rH / 2,
+                       sX + rW + cW, cy - cH / 2,
+                       sX + rW + cW, cy + cH / 2, SSD1306_WHITE);
+
+  if (volumeAnimIndicator != 0) {
+    long elapsed = 300 - (volumeAnimTimer - millis());
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > 300) elapsed = 300;
+
+    int baseRadius = 22;
+    int thickness = 3 - (elapsed * 3) / 300;
+    if (thickness < 1) thickness = 1;
+
+    if (volumeAnimIndicator > 0) {
+      // CW / Increase -> Right arc expanding
+      int r = baseRadius + (elapsed * 10) / 300;
+      drawArc(cx, cy, r, -45, 45, thickness);
+      
+      // Secondary trailing arc
+      if (elapsed > 100) {
+         int r2 = baseRadius + ((elapsed - 100) * 10) / 300;
+         int thick2 = 2 - ((elapsed - 100) * 2) / 300;
+         if (thick2 < 1) thick2 = 1;
+         drawArc(cx, cy, r2, -35, 35, thick2);
+      }
+    } else {
+      // CCW / Decrease -> Left arc retracting (reverse motion)
+      // Reverse motion: starts far and comes inwards towards speaker
+      int r = baseRadius + 10 - (elapsed * 10) / 300;
+      drawArc(cx, cy, r, 135, 225, thickness);
+      
+      if (elapsed > 100) {
+         int r2 = baseRadius + 10 - ((elapsed - 100) * 10) / 300;
+         int thick2 = 2 - ((elapsed - 100) * 2) / 300;
+         if (thick2 < 1) thick2 = 1;
+         drawArc(cx, cy, r2, 145, 215, thick2);
+      }
+    }
+  }
+
+  if (commit) display.display();
 }
 
 inline void drawWakeScreen() {

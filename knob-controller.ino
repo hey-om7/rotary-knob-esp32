@@ -91,226 +91,6 @@ void playHourlyChime() {
 }
 
 // =============================================================
-// ICON DRAWING
-// =============================================================
-
-const unsigned char epd_bitmap_wifi_icon [] PROGMEM = {
-  0x03, 0x80, 0x0f, 0xf0, 0x3f, 0xfc, 0xfc, 0x3f, 0x61, 0x8e, 0x0f, 0xf0,
-  0x1f, 0xf8, 0x0e, 0x70, 0x00, 0x00, 0x03, 0xc0, 0x01, 0x80, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-void drawWifiIcon(int cx, int cy, bool connected) {
-  if (connected) {
-    display.drawBitmap(cx, cy, epd_bitmap_wifi_icon, 16, 16, SSD1306_WHITE);
-  }
-  if (!connected) {
-    display.drawLine(cx + 2, cy + 12, cx + 10, cy, SSD1306_WHITE);
-  }
-}
-
-void drawBTIcon(int x, int y, bool paired) {
-  int cx     = x + 5;
-  int top    = y;
-  int bot    = y + 12;
-  int lx     = x + 1;
-  int rx     = x + 9;
-  int upperY = y + 3;
-  int lowerY = y + 9;
-
-  display.drawLine(cx, top, cx, bot,       SSD1306_WHITE);
-  display.drawLine(lx, lowerY, rx, upperY, SSD1306_WHITE);
-  display.drawLine(lx, upperY, rx, lowerY, SSD1306_WHITE);
-  display.drawLine(cx, top, rx, upperY,    SSD1306_WHITE);
-  display.drawLine(cx, bot, rx, lowerY,    SSD1306_WHITE);
-
-  if (!paired) {
-    display.drawLine(x, y + 12, x + 10, y, SSD1306_WHITE);
-  }
-}
-
-// =============================================================
-// STANDBY SCREEN
-// =============================================================
-void drawStandbyScreen() {
-  struct tm timeinfo;
-  bool timeValid = getTime(timeinfo);
-
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-
-  bool wifiOn = (WiFi.status() == WL_CONNECTED);
-  bool btOn   = isBleConnected();
-
-  drawWifiIcon(90, 1, wifiOn);
-  drawBTIcon(112, 0, btOn);
-  display.drawFastHLine(0, 17, 128, SSD1306_WHITE);
-
-  if (!timeValid) {
-    display.setTextSize(2);
-    display.setCursor(16, 28);
-    display.print("No Time");
-    display.setTextSize(1);
-    display.setCursor(18, 54);
-    display.print("(WiFi needed)");
-  } else {
-    char timeBuf[6];
-    strftime(timeBuf, sizeof(timeBuf), "%I:%M", &timeinfo);
-    display.setTextSize(3);
-    display.setCursor(19, 25);
-    display.print(timeBuf);
-
-    char ampm[3];
-    strftime(ampm, sizeof(ampm), "%p", &timeinfo);
-    display.setTextSize(1);
-    display.setCursor(110, 39);
-    display.print(ampm);
-
-    char dateBuf[16];
-    strftime(dateBuf, sizeof(dateBuf), "%a, %d %b", &timeinfo);
-    display.setCursor(31, 56);
-    display.print(dateBuf);
-  }
-
-  display.display();
-}
-
-// =============================================================
-// MAIN MENU
-// =============================================================
-void drawMenu() {
-  display.clearDisplay();
-
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(10, 0);
-  display.print("MAIN MENU");
-
-  display.drawFastHLine(0, 16, 128, SSD1306_WHITE);
-
-  const char* labels[3] = { "1. Volume Knob", "2. Wake Mode", "3. Timer" };
-  const int   yPos[3]   = { 20, 34, 48 };
-
-  display.setTextSize(1);
-  for (int i = 0; i < 3; i++) {
-    if (menuSelection == i) {
-      display.fillRect(0, yPos[i] - 1, 128, 10, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-    } else {
-      display.setTextColor(SSD1306_WHITE);
-    }
-    display.setCursor(6, yPos[i]);
-    display.print(labels[i]);
-  }
-
-  display.setTextColor(SSD1306_WHITE);
-  display.display();
-}
-
-// =============================================================
-// OTHER SCREENS
-// =============================================================
-
-void drawVolumeScreen() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("< Back (Press Btn)");
-  display.setTextSize(2);
-  display.setCursor(20, 28);
-  display.println("VOLUME");
-  display.display();
-}
-
-void drawWakeScreen() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("< Back (Press Btn)");
-  display.setTextSize(2);
-  display.setCursor(4, 24);
-  display.println("WAKE MODE");
-  display.setTextSize(1);
-  display.setCursor(14, 50);
-  display.println("Mouse wiggling...");
-  display.display();
-}
-
-void drawTimerSetScreen() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("Set Timer (Mins):");
-  display.setTextSize(3);
-  display.setCursor(40, 28);
-  display.print(timerMinutes);
-  display.display();
-}
-
-void drawTimerRunningScreen(int remainingSeconds) {
-  int mins = remainingSeconds / 60;
-  int secs = remainingSeconds % 60;
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("Timer Running:");
-  display.setTextSize(3);
-  display.setCursor(10, 28);
-  if (mins < 10) display.print("0");
-  display.print(mins);
-  display.print(":");
-  if (secs < 10) display.print("0");
-  display.print(secs);
-  display.display();
-}
-
-void drawTimerPausedScreen() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("Timer Paused");
-  display.setTextSize(2);
-
-  if (pauseSelection == 0) {
-    display.fillRect(0, 17, 128, 20, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  } else {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  display.setCursor(10, 19);
-  display.println("Resume");
-
-  if (pauseSelection == 1) {
-    display.fillRect(0, 42, 128, 20, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  } else {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  display.setCursor(10, 44);
-  display.println("Stop");
-
-  display.setTextColor(SSD1306_WHITE);
-  display.display();
-}
-
-void drawTimerEndedScreen() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(2);
-  display.setCursor(10, 16);
-  display.println("TIME UP!");
-  display.setTextSize(1);
-  display.setCursor(10, 50);
-  display.println("Press Btn to Stop");
-  display.display();
-}
-
-// =============================================================
 // SETUP
 // =============================================================
 void setup() {
@@ -324,7 +104,8 @@ void setup() {
   // PHASE 1: Display + animation starts immediately on Core 0.
   // The spinning animation plays continuously in the background
   // while all the blocking init below runs on Core 1.
-  initDisplayAndShowLogo();
+  initDisplay();
+  drawWelcomeScreen();
 
   // PHASE 2: All blocking init — animation keeps playing throughout
   initOTA();
@@ -351,7 +132,6 @@ void setup() {
   // stopWelcomeAnimation() blocks until the Core 0 task exits,
   // guaranteeing the display is free before drawMenu() uses it.
   // Encoder ISRs are attached last so they don't fire mid-init.
-  stopWelcomeAnimation();
   initRotary();
 
   counter          = 0;
@@ -415,6 +195,7 @@ void loop() {
     counter           = 0;
     lastMenuSelection = -1;
     lastActivityTime  = millis();
+    enteredStandbyFromVolume = false;
     drawMenu();
   }
 
@@ -426,12 +207,28 @@ void loop() {
     if (wokenByButton || wokenByEncoder) {
       buttonPressed     = false;
       buttonLongPressed = false;
-      currentState      = STATE_MENU;
-      counter           = 0;
+      
+      currentState      = STATE_ANIMATING_WAKE;
+      animYOffset       = 0;
+      animLastFrameTime = millis();
+      preAnimState      = STATE_STANDBY;
+      
+      if (enteredStandbyFromVolume) {
+          postAnimState = STATE_VOLUME;
+      } else {
+          postAnimState = STATE_MENU;
+      }
+      
+      if (postAnimState == STATE_MENU) {
+          counter = 0;
+      } else {
+          // If returning to volume, wait till animation ends to read new changes,
+          // but we preserve lastStandbyCounter to prevent jumping.
+          counter = lastStandbyCounter;
+      }
+      
       lastMenuSelection = -1;
       lastActivityTime  = millis();
-      switchToKeyboardMode();
-      drawMenu();
       return;
     }
     if (millis() - lastStandbyUpdate >= 1000) {
@@ -459,11 +256,9 @@ void loop() {
       lastDisplayedCounter = 0;
 
       if (menuSelection == 0) {
-        switchToKeyboardMode();
         currentState = STATE_VOLUME;
         drawVolumeScreen();
       } else if (menuSelection == 1) {
-        switchToMouseMode();
         currentState    = STATE_WAKE;
         lastKeySendTime = 0;
         drawWakeScreen();
@@ -474,9 +269,14 @@ void loop() {
       }
     }
 
-    // Enter standby after idle timeout — MENU only
+    // Enter standby after idle timeout — MENU
     if (millis() - lastActivityTime >= STANDBY_TIMEOUT_MS) {
-      currentState       = STATE_STANDBY;
+      currentState       = STATE_ANIMATING_TO_STANDBY;
+      animYOffset        = 0;
+      animLastFrameTime  = millis();
+      preAnimState       = STATE_MENU;
+      postAnimState      = STATE_STANDBY;
+      enteredStandbyFromVolume = false;
       lastStandbyCounter = counter;
       lastStandbyUpdate  = 0;
     }
@@ -485,9 +285,28 @@ void loop() {
   // ── STATE: VOLUME KNOB ────────────────────────────────────
   else if (currentState == STATE_VOLUME) {
     if (counter != lastDisplayedCounter) {
-      if (counter > lastDisplayedCounter) sendVolumeUp();
-      else                                sendVolumeDown();
+      if (counter > lastDisplayedCounter) {
+          sendVolumeUp();
+          volumeAnimIndicator = 1;
+      } else {
+          sendVolumeDown();
+          volumeAnimIndicator = -1;
+      }
       lastDisplayedCounter = counter;
+      lastActivityTime = millis();
+      volumeAnimTimer = millis() + 300; // animation duration
+      drawVolumeScreen();
+    }
+    
+    // Clear or play volume animation after timeout
+    if (volumeAnimIndicator != 0) {
+      if (millis() >= volumeAnimTimer) {
+        volumeAnimIndicator = 0;
+        drawVolumeScreen();
+      } else if (millis() - lastVolAnimFrameTime >= 20) { 
+        lastVolAnimFrameTime = millis();
+        drawVolumeScreen();
+      }
     }
     if (buttonPressed) {
       buttonPressed     = false;
@@ -495,6 +314,18 @@ void loop() {
       counter           = 0;
       lastMenuSelection = -1;
       lastActivityTime  = millis();
+    }
+
+    // Inactivity timeout logic for Volume Screen
+    if (millis() - lastActivityTime >= STANDBY_TIMEOUT_MS) {
+      currentState       = STATE_ANIMATING_TO_STANDBY;
+      animYOffset        = 0;
+      animLastFrameTime  = millis();
+      preAnimState       = STATE_VOLUME;
+      postAnimState      = STATE_STANDBY;
+      enteredStandbyFromVolume = true;
+      lastStandbyCounter = counter;
+      lastStandbyUpdate  = 0;
     }
   }
 
@@ -507,7 +338,6 @@ void loop() {
       counter           = 0;
       lastMenuSelection = -1;
       lastActivityTime  = millis();
-      switchToKeyboardMode();
     }
   }
 
@@ -588,6 +418,57 @@ void loop() {
       counter           = 0;
       lastMenuSelection = -1;
       lastActivityTime  = millis();
+    }
+  }
+
+
+
+  // ── STATE: ANIMATING TO STANDBY ───────────────────────────
+  else if (currentState == STATE_ANIMATING_TO_STANDBY) {
+    if (millis() - animLastFrameTime >= 15) { 
+      animYOffset += 6; 
+      if (animYOffset >= 64) {
+        animYOffset = 64;
+        currentState = postAnimState;
+        drawStandbyScreen();
+      } else {
+        display.clearDisplay();
+        if (preAnimState == STATE_VOLUME) {
+          drawVolumeScreen(animYOffset, false);
+        } else {
+          drawMenu(animYOffset, false);
+        }
+        drawStandbyScreen(animYOffset - 64, false);
+        display.display();
+      }
+      animLastFrameTime = millis();
+    }
+  }
+
+  // ── STATE: ANIMATING WAKE ─────────────────────────────────
+  else if (currentState == STATE_ANIMATING_WAKE) {
+    if (millis() - animLastFrameTime >= 15) {
+      animYOffset -= 8; 
+      if (animYOffset <= -64) {
+        animYOffset = 0;
+        currentState = postAnimState;
+        if (postAnimState == STATE_VOLUME) {
+          drawVolumeScreen();
+        } else {
+          enteredStandbyFromVolume = false;
+          drawMenu();
+        }
+      } else {
+        display.clearDisplay();
+        drawStandbyScreen(animYOffset, false); 
+        if (postAnimState == STATE_VOLUME) {
+          drawVolumeScreen(animYOffset + 64, false); 
+        } else {
+          drawMenu(animYOffset + 64, false);
+        }
+        display.display();
+      }
+      animLastFrameTime = millis();
     }
   }
 
