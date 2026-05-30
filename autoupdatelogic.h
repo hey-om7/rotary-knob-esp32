@@ -118,6 +118,7 @@ inline void checkForOTAUpdate() {
       printLog("OTA: Current ver: " + CURRENT_VERSION + " Latest: " + latestVersion + " Upgradable: " + String(canBeUpgradable));
       if (canBeUpgradable) {
         printLog("OTA: Starting update...");
+        updatingFirmwareScreen();   // Show progress BEFORE the download starts
         httpUpdate.rebootOnUpdate(false);
         t_httpUpdate_return result = httpUpdate.update(client, firmwareBinUrl);
         switch (result) {
@@ -129,7 +130,6 @@ inline void checkForOTAUpdate() {
             break;
           case HTTP_UPDATE_OK:
             saveVersionToEEPROM(latestVersion);
-            updatingFirmwareScreen();
             printLog("OTA: Update successful. Rebooting...");
             delay(500);
             ESP.restart();

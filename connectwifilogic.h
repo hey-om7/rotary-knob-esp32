@@ -6,41 +6,43 @@
 #include <WebServer.h>
 #include "globals.h"
 
-// External server object defined in the main sketch or globals
+// External server object defined in the main sketch
 extern WebServer server;
 bool configReceived = false;
 
-void startConfigPortal();
-
 /**
- * Attempts to connect to WiFi. If it fails, starts the Config Portal.
- * This is better than going straight to Portal every time.
+ * Attempts to connect to WiFi using saved credentials.
+ * Returns true if connected, false if the config portal is needed.
  */
-void connectToWiFi() {
-  // Initialize WiFi in Station mode first to check for saved credentials
+bool connectToWiFi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(); // This attempts to connect using credentials stored in NVS automatically
+  WiFi.begin(); // Uses credentials stored in NVS automatically
 
   Serial.println("Attempting to connect to saved WiFi...");
   unsigned long startAttempt = millis();
-  
-  // Wait 10 seconds to see if it connects automatically
+
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
     delay(500);
     Serial.print(".");
   }
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nNo saved WiFi found or connection failed. Starting Portal...");
-    startConfigPortal(); 
-  } else {
+  if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nConnected Automatically!");
+    return true;
   }
+
+  Serial.println("\nNo saved WiFi found or connection failed.");
+  return false;
 }
 
-void startConfigPortal() {
-  // Set up Access Point
-  WiFi.mode(WIFI_AP_STA); // AP_STA allows scanning while being an AP
+/**
+ * Initializes the captive portal AP and registers web routes.
+ * NON-BLOCKING — call handleConfigPortalClient() in a loop.
+ */
+void setupConfigPortal() {
+  configReceived = false;
+
+  WiFi.mode(WIFI_AP_STA);
   IPAddress apIP(10, 10, 10, 10);
   IPAddress netMsk(255, 255, 255, 0);
   WiFi.softAPConfig(apIP, apIP, netMsk);
@@ -49,7 +51,7 @@ void startConfigPortal() {
   Serial.println("AP Started: ATTENDLE_FACTORY_FIRMWARE");
   Serial.println("Go to http://10.10.10.10 in your browser");
 
-  // 1. Scan for nearby networks
+  // Scan for nearby networks
   int n = WiFi.scanNetworks();
   String networkList = "<ul>";
   if (n == 0) {
@@ -58,12 +60,12 @@ void startConfigPortal() {
     for (int i = 0; i < n; ++i) {
       String ssid = WiFi.SSID(i);
       int rssi = WiFi.RSSI(i);
-      // Clickable SSID link that calls the JavaScript function
       networkList += "<li><a href='#' onclick='fillSSID(\"" + ssid + "\")'>" + ssid + "</a> (" + String(rssi) + " dBm)</li>";
     }
   }
   networkList += "</ul>";
 
+  // --- Portal landing page ---
   server.on("/", [networkList]() {
     String mac = WiFi.macAddress();
     String html = R"rawliteral(
@@ -108,38 +110,62 @@ void startConfigPortal() {
     server.send(200, "text/html", html);
   });
 
+  // --- Credential save handler ---
   server.on("/save", []() {
     String ssid = server.arg("ssid");
     String pass = server.arg("pass");
-    server.send(200, "text/html", "Credentials Received. Attempting to connect... If the device LED stops blinking, it is connected.");
-    
-    delay(2000);
+    server.send(200, "text/html",
+      "Credentials received. Connecting...<br>"
+      "If successful, the device will continue automatically.");
+
+    delay(1000);
+
+    // Try connecting with new credentials
     WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
     WiFi.begin(ssid.c_str(), pass.c_str());
-    
-    // Check connection for 10 seconds
+
     unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
       delay(500);
+      Serial.print(".");
     }
+    Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
-      configReceived = true; // This will break the while loop in startConfigPortal
+      Serial.println("Connected via portal!");
+      configReceived = true;
     } else {
-      // If it fails, it stays in the while(!configReceived) loop and server continues
-      Serial.println("Connection failed. Stay in portal.");
+      Serial.println("Connection failed. Restarting portal AP...");
+      WiFi.mode(WIFI_AP_STA);
+      IPAddress apIP(10, 10, 10, 10);
+      IPAddress netMsk(255, 255, 255, 0);
+      WiFi.softAPConfig(apIP, apIP, netMsk);
       WiFi.softAP("ATTENDLE_FACTORY_FIRMWARE");
     }
   });
 
   server.begin();
-  // Blocking loop until WiFi is successfully configured
-  while (!configReceived) {
-    server.handleClient();
-    delay(1);
-  }
+}
+
+/**
+ * Call in a loop — returns true once WiFi is configured via the portal.
+ */
+bool handleConfigPortalClient() {
+  server.handleClient();
+  return configReceived;
+}
+
+/**
+ * Tears down the config portal AP and stops the portal server.
+ */
+void stopConfigPortal() {
   server.stop();
-  Serial.println("Portal closed. Proceeding to main logic.");
+  WiFi.softAPdisconnect(true);
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.mode(WIFI_STA);   // Keep WiFi, drop AP
+  }
+  Serial.println("Config portal closed.");
 }
 
 #endif

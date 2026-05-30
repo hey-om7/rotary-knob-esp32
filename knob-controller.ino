@@ -14,7 +14,7 @@ WebServer server(80);
 #include "rotarycode.h"
 #include "blelogic.h"
 
-#define BUZZER_PIN 5
+// BUZZER_PIN is defined in globals.h
 
 // --- NTP Configuration ---
 // IST (India/Pune) = UTC+5:30 = 19800 seconds
@@ -101,38 +101,79 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // PHASE 1: Display + animation starts immediately on Core 0.
-  // The spinning animation plays continuously in the background
-  // while all the blocking init below runs on Core 1.
+  // PHASE 1: Display init — must come first so we can show progress
   initDisplay();
-  drawWelcomeScreen();
+  drawBootProgress("Starting up...", 5);
 
-  // PHASE 2: All blocking init — animation keeps playing throughout
+  // PHASE 2: Read firmware version from EEPROM
+  drawBootProgress("Reading firmware...", 10);
   initOTA();
-  connectToWiFi();
-  checkForOTAUpdate();
-  initWebserver();
 
-  configTime(UTC_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
-  Serial.println("Waiting for NTP time sync...");
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 10000)) {
-    Serial.println("NTP synced OK.");
-    cachedTimeinfo   = timeinfo;
-    cachedTimeMillis = millis();
-    ntpEverSynced    = true;
-    lastChimeHour    = timeinfo.tm_hour;
-  } else {
-    Serial.println("NTP sync failed — cache helper will retry.");
+  // PHASE 3: WiFi connection (with config portal fallback)
+  drawBootProgress("Connecting WiFi...", 20);
+  bool wifiOk = connectToWiFi();
+
+  if (!wifiOk) {
+    // Launch the captive portal and show instructions on the OLED.
+    // If no one configures WiFi within the timeout, continue offline.
+    setupConfigPortal();
+    unsigned long portalStart = millis();
+    int lastSec = -1;
+    while (!handleConfigPortalClient() &&
+           millis() - portalStart < CONFIG_PORTAL_TIMEOUT_MS) {
+      int remainingSec = (int)((CONFIG_PORTAL_TIMEOUT_MS - (millis() - portalStart)) / 1000);
+      if (remainingSec != lastSec) {
+        drawConfigPortalScreen(remainingSec);
+        lastSec = remainingSec;
+      }
+      delay(10);
+    }
+    stopConfigPortal();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi configured via portal!");
+    } else {
+      Serial.println("Portal timed out. Continuing in offline mode.");
+    }
   }
 
+  wifiConnectedAtBoot = (WiFi.status() == WL_CONNECTED);
+
+  // PHASE 4: OTA firmware update check
+  drawBootProgress("Checking updates...", 50);
+  checkForOTAUpdate();
+
+  // PHASE 5: Web server + mDNS
+  drawBootProgress("Starting services...", 65);
+  initWebserver();
+
+  // PHASE 6: NTP time sync (skip if offline)
+  if (WiFi.status() == WL_CONNECTED) {
+    drawBootProgress("Syncing clock...", 75);
+    configTime(UTC_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
+    Serial.println("Waiting for NTP time sync...");
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 5000)) {
+      Serial.println("NTP synced OK.");
+      cachedTimeinfo   = timeinfo;
+      cachedTimeMillis = millis();
+      ntpEverSynced    = true;
+      lastChimeHour    = timeinfo.tm_hour;
+    } else {
+      Serial.println("NTP sync failed — cache helper will retry.");
+    }
+  } else {
+    Serial.println("No WiFi — skipping NTP sync.");
+  }
+
+  // PHASE 7: BLE keyboard
+  drawBootProgress("Starting BLE...", 90);
   initBLE();
 
-  // PHASE 3: Stop animation cleanly, then init encoder.
-  // stopWelcomeAnimation() blocks until the Core 0 task exits,
-  // guaranteeing the display is free before drawMenu() uses it.
-  // Encoder ISRs are attached last so they don't fire mid-init.
+  // PHASE 8: Rotary encoder (ISRs attached last to avoid mid-init firing)
+  drawBootProgress("Ready!", 100);
   initRotary();
+  delay(400); // Brief pause so the user sees "Ready!"
 
   counter          = 0;
   lastActivityTime = millis();
@@ -160,6 +201,20 @@ void checkHourlyChime() {
 // =============================================================
 void loop() {
   server.handleClient();
+  checkHourlyChime();
+
+  // ── WiFi auto-reconnect (non-blocking) ──────────────────────
+  {
+    static unsigned long lastWifiCheck = 0;
+    if (wifiConnectedAtBoot &&
+        WiFi.status() != WL_CONNECTED &&
+        millis() - lastWifiCheck >= WIFI_RECONNECT_INTERVAL_MS) {
+      lastWifiCheck = millis();
+      Serial.println("WiFi lost. Attempting reconnect...");
+      WiFi.disconnect();
+      WiFi.begin();
+    }
+  }
 
   // ── NON-BLOCKING UI BUZZER LOGIC ────────────────────────────
   // 1. Trigger the buzzer if a button is pressed (and we aren't in the alarm state)
@@ -260,7 +315,7 @@ void loop() {
         drawVolumeScreen();
       } else if (menuSelection == 1) {
         currentState    = STATE_WAKE;
-        lastKeySendTime = 0;
+        lastKeySendTime = millis();
         drawWakeScreen();
       } else if (menuSelection == 2) {
         currentState     = STATE_TIMER_SET;

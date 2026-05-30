@@ -7,8 +7,11 @@
 #include <EEPROM.h>
 
 #define EEPROM_SIZE 1024
+#define BUZZER_PIN  5
 
-#define STANDBY_TIMEOUT_MS 10000UL //Standby mode after 10 seconds
+#define STANDBY_TIMEOUT_MS         10000UL  // Standby mode after 10 seconds
+#define CONFIG_PORTAL_TIMEOUT_MS   60000UL  // 60s timeout for WiFi config portal
+#define WIFI_RECONNECT_INTERVAL_MS 30000UL  // 30s between WiFi reconnect attempts
 
 const char* ipServer = "192.168.1.100";
 
@@ -19,7 +22,7 @@ const String baseLoggingUrl = "http://" + String(ipServer) + ":8080/api/v1/devic
 
 const unsigned long wakeModeKeyInterval = 2 * 60 * 1000; // 2 minutes
 
-const String hostname = "knobcontroller"; // For mDNS: http://knobcontroller.local
+const char* hostname = "knobcontroller"; // For mDNS: http://knobcontroller.local
 
 
 // --- State Machine Definitions ---
@@ -51,6 +54,9 @@ unsigned long timerRemainingMillis = 0;
 
 // --- Standby Tracking ---
 bool enteredStandbyFromVolume = false;
+
+// --- WiFi Tracking ---
+bool wifiConnectedAtBoot = false;
 
 // --- Animation Tracking ---
 int animYOffset = 0;

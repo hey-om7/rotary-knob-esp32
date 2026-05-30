@@ -13,7 +13,10 @@
 #include "rotarycode.h"
 #include "blelogic.h"
 
-#define BUZZER_PIN 5
+// Forward declaration — getTime() is defined in the main sketch.
+// Uses a cache so the standby clock never flickers to "No Time"
+// and never blocks for 5 seconds waiting on NTP.
+bool getTime(struct tm &timeinfo);
 
 
 
@@ -33,14 +36,13 @@ const unsigned char epd_bitmap_wifi_icon [] PROGMEM = {
 // cx, cy = centre of the arc system (dot position).
 // connected = all 3 arcs;  disconnected = 1 small arc only.
 inline void drawWifiIcon(int cx, int cy, bool connected) {
-  if (connected) {
-    display.drawBitmap(cx, cy, epd_bitmap_wifi_icon, 16, 16, SSD1306_WHITE);
-  } 
-    // Visual indicator for "not paired"
-    // Draws a diagonal strike-through to indicate disconnection
-    if(!connected){
-      display.drawLine(cx+2, cy + 12, cx + 10, cy, SSD1306_WHITE);
-    }
+  // Always draw the base WiFi symbol so the icon is visible
+  display.drawBitmap(cx, cy, epd_bitmap_wifi_icon, 16, 16, SSD1306_WHITE);
+
+  // Diagonal strike-through when disconnected
+  if (!connected) {
+    display.drawLine(cx + 2, cy + 12, cx + 10, cy, SSD1306_WHITE);
+  }
 }
 
 // ── Bluetooth icon ────────────────────────────────────────────
@@ -102,7 +104,7 @@ inline void drawSoundIcon(int x, int y) {
 // =============================================================
 inline void drawStandbyScreen(int yOffset = 0, bool commit = true) {
   struct tm timeinfo;
-  bool timeValid = getLocalTime(&timeinfo);
+  bool timeValid = getTime(timeinfo);
 
   if (commit) display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -213,6 +215,84 @@ inline void drawWelcomeScreen(){
   display.setTextSize(1);
   display.setCursor(15, 50);
   display.println("Initializing...");
+  display.display();
+}
+
+// =============================================================
+// BOOT PROGRESS SCREEN
+// Shows a progress bar and phase label during startup so the
+// user always knows the device is alive and what it's doing.
+// =============================================================
+inline void drawBootProgress(const char* phase, int percent) {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  // Title
+  display.setTextSize(2);
+  display.setCursor(10, 2);
+  display.print("Knobby OS");
+
+  // Separator
+  display.drawFastHLine(0, 20, 128, SSD1306_WHITE);
+
+  // Progress bar
+  int barX = 10, barY = 28, barW = 108, barH = 10;
+  display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
+  int fillW = ((barW - 4) * percent) / 100;
+  if (fillW > 0) {
+    display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
+  }
+
+  // Percentage
+  display.setTextSize(1);
+  char pctBuf[5];
+  snprintf(pctBuf, sizeof(pctBuf), "%d%%", percent);
+  int pctW = strlen(pctBuf) * 6;
+  display.setCursor((128 - pctW) / 2, 42);
+  display.print(pctBuf);
+
+  // Phase label (centred)
+  int textW = strlen(phase) * 6;
+  display.setCursor((128 - textW) / 2, 54);
+  display.print(phase);
+
+  display.display();
+}
+
+// =============================================================
+// CONFIG PORTAL SCREEN
+// Shown on the OLED while the WiFi captive portal is active,
+// so the user knows what to do and sees a countdown timer.
+// =============================================================
+inline void drawConfigPortalScreen(int remainingSec) {
+  display.clearDisplay();
+
+  // Header bar (inverted)
+  display.fillRect(0, 0, 128, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(8, 2);
+  display.print("WiFi Setup Mode");
+
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 16);
+  display.print("Join WiFi network:");
+
+  display.setCursor(0, 28);
+  display.print("ATTENDLE_FACTORY_");
+  display.setCursor(0, 37);
+  display.print("  FIRMWARE");
+
+  display.setCursor(0, 49);
+  display.print("Go to: 10.10.10.10");
+
+  // Countdown
+  char buf[18];
+  snprintf(buf, sizeof(buf), "Auto-skip: %ds", remainingSec);
+  display.setCursor(0, 57);
+  display.print(buf);
+
   display.display();
 }
 

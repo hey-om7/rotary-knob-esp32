@@ -36,10 +36,20 @@ inline void initWebserver() {
   if (!MDNS.begin(hostname)) {     // hostname = knobcontroller.local
     Serial.println("Error setting up MDNS!");
   } else {
-    Serial.println("mDNS responder started: http://"+hostname+".local");
+    Serial.print("mDNS responder started: http://");
+    Serial.print(hostname);
+    Serial.println(".local");
   }
 
-  // Register API endpoint
+  // Override any lingering config portal routes
+  server.on("/", HTTP_GET, []() {
+    server.send(200, "text/plain", "Knobby OS Running");
+  });
+  server.on("/save", HTTP_POST, []() {
+    server.send(404, "text/plain", "Not Found");
+  });
+
+  // Register API endpoints
   server.on("/api/restart", HTTP_GET, handleRestart);
 
   server.begin();
