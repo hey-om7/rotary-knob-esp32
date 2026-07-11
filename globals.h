@@ -35,6 +35,7 @@ enum AppState {
   STATE_TIMER_RUNNING,
   STATE_TIMER_PAUSED,
   STATE_TIMER_ENDED,
+  STATE_OBS,           // OBS Play/Pause control
   STATE_ANIMATING_TO_STANDBY,
   STATE_ANIMATING_WAKE
 };
@@ -54,6 +55,11 @@ unsigned long timerRemainingMillis = 0;
 
 // --- Standby Tracking ---
 bool enteredStandbyFromVolume = false;
+
+// --- OBS Control Tracking ---
+bool obsKeySent              = false;   // true once combo is sent for current rotation
+int  obsLastDirection        = 0;       // 1 = right, -1 = left, 0 = idle
+unsigned long obsLastRotateTime = 0;    // millis() of last knob movement
 
 // --- WiFi Tracking ---
 bool wifiConnectedAtBoot = false;

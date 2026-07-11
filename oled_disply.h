@@ -167,8 +167,9 @@ inline void drawStandbyScreen(int yOffset = 0, bool commit = true) {
 //   y  0-15 → "MAIN MENU"  textSize(2)
 //   y  16   → separator
 //   y  20-27 → item 1
-//   y  34-41 → item 2
-//   y  48-55 → item 3
+//   y  31-38 → item 2
+//   y  42-49 → item 3
+//   y  53-60 → item 4
 // =============================================================
 inline void drawMenu(int yOffset = 0, bool commit = true) {
   if (commit) display.clearDisplay();
@@ -183,11 +184,11 @@ inline void drawMenu(int yOffset = 0, bool commit = true) {
   display.drawFastHLine(0, 16 + yOffset, 128, SSD1306_WHITE);
 
   // ── Items ─────────────────────────────────────────────
-  const char* labels[3] = { "1. Volume Knob", "2. Wake Mode", "3. Timer" };
-  const int   yPos[3]   = { 20, 34, 48 };
+  const char* labels[4] = { "1. Volume Knob", "2. Wake Mode", "3. Timer", "4. OBS Control" };
+  const int   yPos[4]   = { 20, 31, 42, 53 };
 
   display.setTextSize(1);
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     if (menuSelection == i) {
       display.fillRect(0, yPos[i] - 1 + yOffset, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
@@ -372,6 +373,83 @@ inline void drawVolumeScreen(int yOffset = 0, bool commit = true) {
   }
 
   if (commit) display.display();
+}
+
+// =============================================================
+// OBS CONTROL SCREEN
+//
+// Clean layout:
+//   y  0      → "< Back" nav hint
+//   y  12     → separator
+//   y  16-30  → "OBS CONTROL" header (textSize 2)
+//   y  36-50  → Play/Pause icon + status label
+//   y  56-63  → instruction hint
+//
+// obsAction: 0 = idle, 1 = play (sent 'k'), -1 = pause (sent 'j')
+// =============================================================
+inline void drawOBSScreen(int obsAction = 0) {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  // ── Nav hint ──────────────────────────────────────────
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("< Back");
+
+  // ── Separator ─────────────────────────────────────────
+  display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+
+  // ── Title ─────────────────────────────────────────────
+  display.setTextSize(2);
+  // "OBS" = 3 chars × 12px = 36px  → centered
+  display.setCursor(28, 15);
+  display.print("OBS");
+
+  // ── Center icon area ──────────────────────────────────
+  int cx = 64;
+  int cy = 44;
+
+  if (obsAction == 1) {
+    // PLAY triangle (pointing right)
+    display.fillTriangle(cx - 8, cy - 10,
+                         cx - 8, cy + 10,
+                         cx + 10, cy, SSD1306_WHITE);
+    // Label
+    display.setTextSize(1);
+    display.setCursor(80, cy - 3);
+    display.print("Play");
+  } else if (obsAction == -1) {
+    // PAUSE icon (two vertical bars)
+    display.fillRect(cx - 9, cy - 9, 5, 18, SSD1306_WHITE);
+    display.fillRect(cx + 4, cy - 9, 5, 18, SSD1306_WHITE);
+    // Label
+    display.setTextSize(1);
+    display.setCursor(76, cy - 3);
+    display.print("Pause");
+  } else {
+    // IDLE: show both icons dimmed with a slash between
+    // Play triangle (smaller)
+    display.drawTriangle(cx + 14, cy - 7,
+                         cx + 14, cy + 7,
+                         cx + 26, cy, SSD1306_WHITE);
+    // Pause bars (smaller)
+    display.drawRect(cx - 26, cy - 7, 4, 14, SSD1306_WHITE);
+    display.drawRect(cx - 18, cy - 7, 4, 14, SSD1306_WHITE);
+    // Divider slash
+    display.setCursor(cx - 3, cy - 3);
+    display.setTextSize(1);
+    display.print("/");
+  }
+
+  // ── Bottom instruction ────────────────────────────────
+  display.setTextSize(1);
+  display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
+  display.setCursor(4, 56);
+  display.print("L:Pause");
+  display.setCursor(76, 56);
+  display.print("R:Play");
+
+  display.display();
 }
 
 inline void drawWakeScreen() {

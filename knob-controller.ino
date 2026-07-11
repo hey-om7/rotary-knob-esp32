@@ -296,7 +296,7 @@ void loop() {
 
   // ── STATE: MAIN MENU ──────────────────────────────────────
   if (currentState == STATE_MENU) {
-    menuSelection = abs(counter / 2) % 3;
+    menuSelection = abs(counter / 2) % 4;
 
     if (menuSelection != lastMenuSelection) {
       lastActivityTime  = millis();
@@ -321,6 +321,14 @@ void loop() {
         currentState     = STATE_TIMER_SET;
         counter          = timerMinutes * 2;
         lastTimerMinutes = -1;
+      } else if (menuSelection == 3) {
+        currentState = STATE_OBS;
+        counter      = 0;
+        lastDisplayedCounter = 0;
+        obsKeySent       = false;
+        obsLastDirection  = 0;
+        obsLastRotateTime = millis();
+        drawOBSScreen(0);
       }
     }
 
@@ -469,6 +477,63 @@ void loop() {
     if (buttonPressed) {
       buttonPressed     = false;
       digitalWrite(BUZZER_PIN, LOW);
+      currentState      = STATE_MENU;
+      counter           = 0;
+      lastMenuSelection = -1;
+      lastActivityTime  = millis();
+    }
+  }
+
+  // ── STATE: OBS CONTROL ────────────────────────────────────
+  else if (currentState == STATE_OBS) {
+    // Reset after 500ms of no rotation
+    if (obsKeySent && millis() - obsLastRotateTime >= 500) {
+      obsKeySent       = false;
+      obsLastDirection = 0;
+      drawOBSScreen(0);
+    }
+
+    if (counter != lastDisplayedCounter) {
+      int direction = (counter > lastDisplayedCounter) ? 1 : -1;
+      obsLastRotateTime = millis();
+
+      // Only send the combo once until 500ms idle reset
+      if (!obsKeySent) {
+        obsKeySent       = true;
+        obsLastDirection = direction;
+
+        if (bleKeyboard.isConnected()) {
+          if (direction == 1) {
+            // Knob RIGHT → CMD+OPTION+SHIFT+K (Play)
+            bleKeyboard.press(KEY_LEFT_GUI);
+            bleKeyboard.press(KEY_LEFT_ALT);
+            bleKeyboard.press(KEY_LEFT_SHIFT);
+            bleKeyboard.press('k');
+            delay(20);
+            bleKeyboard.releaseAll();
+            Serial.println("OBS: Sent Cmd+Opt+Shift+K (Play)");
+          } else {
+            // Knob LEFT → CMD+OPTION+SHIFT+J (Pause)
+            bleKeyboard.press(KEY_LEFT_GUI);
+            bleKeyboard.press(KEY_LEFT_ALT);
+            bleKeyboard.press(KEY_LEFT_SHIFT);
+            bleKeyboard.press('j');
+            delay(20);
+            bleKeyboard.releaseAll();
+            Serial.println("OBS: Sent Cmd+Opt+Shift+J (Pause)");
+          }
+        }
+        drawOBSScreen(direction);
+      }
+
+      lastDisplayedCounter = counter;
+      lastActivityTime     = millis();
+    }
+
+    if (buttonPressed) {
+      buttonPressed     = false;
+      obsKeySent        = false;
+      obsLastDirection  = 0;
       currentState      = STATE_MENU;
       counter           = 0;
       lastMenuSelection = -1;
