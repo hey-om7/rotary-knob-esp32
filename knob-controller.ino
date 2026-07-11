@@ -251,6 +251,8 @@ void loop() {
     lastMenuSelection = -1;
     lastActivityTime  = millis();
     enteredStandbyFromVolume = false;
+    enteredStandbyFromDoorLock = false;
+    enteredStandbyFromOBS = false;
     drawMenu();
   }
 
@@ -270,6 +272,10 @@ void loop() {
       
       if (enteredStandbyFromVolume) {
           postAnimState = STATE_VOLUME;
+      } else if (enteredStandbyFromDoorLock) {
+          postAnimState = STATE_DOORLOCK;
+      } else if (enteredStandbyFromOBS) {
+          postAnimState = STATE_OBS;
       } else {
           postAnimState = STATE_MENU;
       }
@@ -277,7 +283,7 @@ void loop() {
       if (postAnimState == STATE_MENU) {
           counter = 0;
       } else {
-          // If returning to volume, wait till animation ends to read new changes,
+          // If returning to volume/doorlock, wait till animation ends to read new changes,
           // but we preserve lastStandbyCounter to prevent jumping.
           counter = lastStandbyCounter;
       }
@@ -296,7 +302,7 @@ void loop() {
 
   // ── STATE: MAIN MENU ──────────────────────────────────────
   if (currentState == STATE_MENU) {
-    menuSelection = abs(counter / 2) % 4;
+    menuSelection = abs(counter / 2) % MENU_ITEM_COUNT;
 
     if (menuSelection != lastMenuSelection) {
       lastActivityTime  = millis();
@@ -329,6 +335,15 @@ void loop() {
         obsLastDirection  = 0;
         obsLastRotateTime = millis();
         drawOBSScreen(0);
+      } else if (menuSelection == 4) {
+        currentState = STATE_DOORLOCK;
+        counter      = 0;
+        lastDisplayedCounter = 0;
+        doorKeySent       = false;
+        doorLastDirection  = 0;
+        doorLastRotateTime = millis();
+        doorLastStatus     = 0;
+        drawDoorLockScreen(0);
       }
     }
 
@@ -340,6 +355,8 @@ void loop() {
       preAnimState       = STATE_MENU;
       postAnimState      = STATE_STANDBY;
       enteredStandbyFromVolume = false;
+      enteredStandbyFromDoorLock = false;
+      enteredStandbyFromOBS = false;
       lastStandbyCounter = counter;
       lastStandbyUpdate  = 0;
     }
@@ -387,6 +404,8 @@ void loop() {
       preAnimState       = STATE_VOLUME;
       postAnimState      = STATE_STANDBY;
       enteredStandbyFromVolume = true;
+      enteredStandbyFromDoorLock = false;
+      enteredStandbyFromOBS = false;
       lastStandbyCounter = counter;
       lastStandbyUpdate  = 0;
     }
@@ -538,6 +557,110 @@ void loop() {
       counter           = 0;
       lastMenuSelection = -1;
       lastActivityTime  = millis();
+      enteredStandbyFromOBS = false;
+    }
+
+    // Inactivity timeout logic for OBS Screen
+    if (millis() - lastActivityTime >= STANDBY_TIMEOUT_MS) {
+      currentState       = STATE_ANIMATING_TO_STANDBY;
+      animYOffset        = 0;
+      animLastFrameTime  = millis();
+      preAnimState       = STATE_OBS;
+      postAnimState      = STATE_STANDBY;
+      enteredStandbyFromOBS      = true;
+      enteredStandbyFromVolume   = false;
+      enteredStandbyFromDoorLock = false;
+      lastStandbyCounter = counter;
+      lastStandbyUpdate  = 0;
+    }
+  }
+
+  // ── STATE: DOOR LOCK CONTROL ──────────────────────────────
+  else if (currentState == STATE_DOORLOCK) {
+    // Reset after 500ms of no rotation
+    if (doorKeySent && millis() - doorLastRotateTime >= 500) {
+      doorKeySent       = false;
+      doorLastDirection  = 0;
+    }
+
+    if (counter != lastDisplayedCounter) {
+      int direction = (counter > lastDisplayedCounter) ? 1 : -1;
+      doorLastRotateTime = millis();
+
+      // Only send the HTTP request once until 500ms idle reset
+      if (!doorKeySent) {
+        doorKeySent       = true;
+        doorLastDirection  = direction;
+
+        if (WiFi.status() == WL_CONNECTED) {
+          HTTPClient http;
+          int httpCode;
+
+          if (direction == 1) {
+            // Knob RIGHT → Open/Unlock
+            http.begin("http://doorlock.local/open?password=149311&api=true");
+            http.setTimeout(5000);
+            httpCode = http.GET();
+            http.end();
+
+            if (httpCode > 0 && httpCode < 400) {
+              doorLastStatus = 1;
+              Serial.println("DoorLock: Opened");
+            } else {
+              doorLastStatus = 2;
+              Serial.printf("DoorLock: Open failed (%d)\n", httpCode);
+            }
+          } else {
+            // Knob LEFT → Lock
+            http.begin("http://doorlock.local/setMode?password=149311&mode=locked");
+            http.setTimeout(5000);
+            httpCode = http.GET();
+            http.end();
+
+            if (httpCode > 0 && httpCode < 400) {
+              doorLastStatus = -1;
+              Serial.println("DoorLock: Locked");
+            } else {
+              doorLastStatus = 2;
+              Serial.printf("DoorLock: Lock failed (%d)\n", httpCode);
+            }
+          }
+        } else {
+          doorLastStatus = 2;
+          Serial.println("DoorLock: No WiFi");
+        }
+
+        drawDoorLockScreen(doorLastStatus);
+      }
+
+      lastDisplayedCounter = counter;
+      lastActivityTime     = millis();
+    }
+
+    if (buttonPressed) {
+      buttonPressed      = false;
+      doorKeySent        = false;
+      doorLastDirection   = 0;
+      doorLastStatus     = 0;
+      currentState       = STATE_MENU;
+      counter            = 0;
+      lastMenuSelection  = -1;
+      lastActivityTime   = millis();
+      enteredStandbyFromDoorLock = false;
+    }
+
+    // Inactivity timeout logic for DoorLock Screen
+    if (millis() - lastActivityTime >= STANDBY_TIMEOUT_MS) {
+      currentState       = STATE_ANIMATING_TO_STANDBY;
+      animYOffset        = 0;
+      animLastFrameTime  = millis();
+      preAnimState       = STATE_DOORLOCK;
+      postAnimState      = STATE_STANDBY;
+      enteredStandbyFromDoorLock = true;
+      enteredStandbyFromVolume   = false;
+      enteredStandbyFromOBS      = false;
+      lastStandbyCounter = counter;
+      lastStandbyUpdate  = 0;
     }
   }
 
@@ -555,6 +678,10 @@ void loop() {
         display.clearDisplay();
         if (preAnimState == STATE_VOLUME) {
           drawVolumeScreen(animYOffset, false);
+        } else if (preAnimState == STATE_DOORLOCK) {
+          drawDoorLockScreen(doorLastStatus, animYOffset, false);
+        } else if (preAnimState == STATE_OBS) {
+          drawOBSScreen(obsLastDirection, animYOffset, false);
         } else {
           drawMenu(animYOffset, false);
         }
@@ -574,8 +701,14 @@ void loop() {
         currentState = postAnimState;
         if (postAnimState == STATE_VOLUME) {
           drawVolumeScreen();
+        } else if (postAnimState == STATE_DOORLOCK) {
+          drawDoorLockScreen(doorLastStatus);
+        } else if (postAnimState == STATE_OBS) {
+          drawOBSScreen(obsLastDirection);
         } else {
           enteredStandbyFromVolume = false;
+          enteredStandbyFromDoorLock = false;
+          enteredStandbyFromOBS = false;
           drawMenu();
         }
       } else {
@@ -583,6 +716,10 @@ void loop() {
         drawStandbyScreen(animYOffset, false); 
         if (postAnimState == STATE_VOLUME) {
           drawVolumeScreen(animYOffset + 64, false); 
+        } else if (postAnimState == STATE_DOORLOCK) {
+          drawDoorLockScreen(doorLastStatus, animYOffset + 64, false);
+        } else if (postAnimState == STATE_OBS) {
+          drawOBSScreen(obsLastDirection, animYOffset + 64, false);
         } else {
           drawMenu(animYOffset + 64, false);
         }

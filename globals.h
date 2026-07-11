@@ -36,6 +36,7 @@ enum AppState {
   STATE_TIMER_PAUSED,
   STATE_TIMER_ENDED,
   STATE_OBS,           // OBS Play/Pause control
+  STATE_DOORLOCK,      // Door Lock/Unlock control
   STATE_ANIMATING_TO_STANDBY,
   STATE_ANIMATING_WAKE
 };
@@ -55,11 +56,19 @@ unsigned long timerRemainingMillis = 0;
 
 // --- Standby Tracking ---
 bool enteredStandbyFromVolume = false;
+bool enteredStandbyFromDoorLock = false;
+bool enteredStandbyFromOBS = false;
 
 // --- OBS Control Tracking ---
 bool obsKeySent              = false;   // true once combo is sent for current rotation
 int  obsLastDirection        = 0;       // 1 = right, -1 = left, 0 = idle
 unsigned long obsLastRotateTime = 0;    // millis() of last knob movement
+
+// --- DoorLock Control Tracking ---
+bool doorKeySent              = false;
+int  doorLastDirection        = 0;
+unsigned long doorLastRotateTime = 0;
+int  doorLastStatus           = 0;      // 0=idle, 1=unlocked, -1=locked, 2=error
 
 // --- WiFi Tracking ---
 bool wifiConnectedAtBoot = false;

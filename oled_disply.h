@@ -73,6 +73,19 @@ inline void drawBTIcon(int x, int y, bool paired) {
   }
 }
 
+// ── Lock icon (small, for status bar) ─────────────────────────
+inline void drawLockIcon(int x, int y) {
+  // Small padlock: 10x12 px bounding box
+  // Shackle (arch)
+  display.drawLine(x + 3, y + 5, x + 3, y + 2, SSD1306_WHITE);
+  display.drawLine(x + 3, y + 2, x + 7, y + 2, SSD1306_WHITE);
+  display.drawLine(x + 7, y + 2, x + 7, y + 5, SSD1306_WHITE);
+  // Lock body
+  display.fillRect(x + 1, y + 5, 9, 7, SSD1306_WHITE);
+  // Keyhole
+  display.fillCircle(x + 5, y + 8, 1, SSD1306_BLACK);
+}
+
 // ── Sound icon ────────────────────────────────────────────────
 inline void drawSoundIcon(int x, int y) {
   int leftX = x + 2;
@@ -115,6 +128,10 @@ inline void drawStandbyScreen(int yOffset = 0, bool commit = true) {
 
   if (enteredStandbyFromVolume) {
     drawSoundIcon(68, 1 + yOffset);
+  }
+
+  if (enteredStandbyFromDoorLock) {
+    drawLockIcon(54, 1 + yOffset);
   }
 
   // WiFi: arc system with dot at (14, 14) → arcs open upward
@@ -163,40 +180,67 @@ inline void drawStandbyScreen(int yOffset = 0, bool commit = true) {
 //   Header → textSize(2) = 16px tall  ("MAIN MENU", centred)
 //   Items  → textSize(1) =  8px tall  (full-width highlight bar)
 //
+// Scrolling window: shows 3 items at a time, scrolls to keep
+// the selected item visible. Original spacing preserved.
+//
 // 128×64 layout:
 //   y  0-15 → "MAIN MENU"  textSize(2)
 //   y  16   → separator
-//   y  20-27 → item 1
-//   y  31-38 → item 2
-//   y  42-49 → item 3
-//   y  53-60 → item 4
+//   y  20   → item slot 1
+//   y  34   → item slot 2
+//   y  48   → item slot 3
 // =============================================================
+#define MENU_ITEM_COUNT 5
+#define MENU_VISIBLE    3
+
 inline void drawMenu(int yOffset = 0, bool commit = true) {
   if (commit) display.clearDisplay();
 
   // ── Header ────────────────────────────────────────────
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
-  // "MAIN MENU" = 9 chars × 12px = 108px  →  x = (128-108)/2 = 10
   display.setCursor(10, 0 + yOffset);
   display.print("MAIN MENU");
 
   display.drawFastHLine(0, 16 + yOffset, 128, SSD1306_WHITE);
 
-  // ── Items ─────────────────────────────────────────────
-  const char* labels[4] = { "1. Volume Knob", "2. Wake Mode", "3. Timer", "4. OBS Control" };
-  const int   yPos[4]   = { 20, 31, 42, 53 };
+  // ── Scrolling window ──────────────────────────────────
+  const char* labels[MENU_ITEM_COUNT] = {
+    "1. Volume Knob", "2. Wake Mode", "3. Timer",
+    "4. OBS Control", "5. DoorLock"
+  };
+  const int yPos[MENU_VISIBLE] = { 20, 34, 48 };
+
+  // Calculate scroll offset to keep selection visible
+  int scrollTop = 0;
+  if (menuSelection >= MENU_VISIBLE) {
+    scrollTop = menuSelection - (MENU_VISIBLE - 1);
+  }
 
   display.setTextSize(1);
-  for (int i = 0; i < 4; i++) {
-    if (menuSelection == i) {
-      display.fillRect(0, yPos[i] - 1 + yOffset, 128, 10, SSD1306_WHITE);
+  for (int slot = 0; slot < MENU_VISIBLE; slot++) {
+    int itemIdx = scrollTop + slot;
+    if (itemIdx >= MENU_ITEM_COUNT) break;
+
+    if (itemIdx == menuSelection) {
+      display.fillRect(0, yPos[slot] - 1 + yOffset, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
     } else {
       display.setTextColor(SSD1306_WHITE);
     }
-    display.setCursor(6, yPos[i] + yOffset);
-    display.print(labels[i]);
+    display.setCursor(6, yPos[slot] + yOffset);
+    display.print(labels[itemIdx]);
+  }
+
+  // ── Scroll indicators ─────────────────────────────────
+  display.setTextColor(SSD1306_WHITE);
+  if (scrollTop > 0) {
+    // Up arrow indicator
+    display.fillTriangle(120, 19 + yOffset, 124, 19 + yOffset, 122, 17 + yOffset, SSD1306_WHITE);
+  }
+  if (scrollTop + MENU_VISIBLE < MENU_ITEM_COUNT) {
+    // Down arrow indicator
+    display.fillTriangle(120, 57 + yOffset, 124, 57 + yOffset, 122, 59 + yOffset, SSD1306_WHITE);
   }
 
   display.setTextColor(SSD1306_WHITE);
@@ -387,27 +431,27 @@ inline void drawVolumeScreen(int yOffset = 0, bool commit = true) {
 //
 // obsAction: 0 = idle, 1 = play (sent 'k'), -1 = pause (sent 'j')
 // =============================================================
-inline void drawOBSScreen(int obsAction = 0) {
-  display.clearDisplay();
+inline void drawOBSScreen(int obsAction = 0, int yOffset = 0, bool commit = true) {
+  if (commit) display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
   // ── Nav hint ──────────────────────────────────────────
   display.setTextSize(1);
-  display.setCursor(0, 0);
+  display.setCursor(0, 0 + yOffset);
   display.print("< Back");
 
   // ── Separator ─────────────────────────────────────────
-  display.drawFastHLine(0, 11, 128, SSD1306_WHITE);
+  display.drawFastHLine(0, 11 + yOffset, 128, SSD1306_WHITE);
 
   // ── Title ─────────────────────────────────────────────
   display.setTextSize(2);
   // "OBS" = 3 chars × 12px = 36px  → centered
-  display.setCursor(28, 15);
+  display.setCursor(28, 15 + yOffset);
   display.print("OBS");
 
   // ── Center icon area ──────────────────────────────────
   int cx = 64;
-  int cy = 44;
+  int cy = 44 + yOffset;
 
   if (obsAction == 1) {
     // PLAY triangle (pointing right)
@@ -443,13 +487,97 @@ inline void drawOBSScreen(int obsAction = 0) {
 
   // ── Bottom instruction ────────────────────────────────
   display.setTextSize(1);
-  display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
-  display.setCursor(4, 56);
+  display.setCursor(4, 56 + yOffset);
   display.print("L:Pause");
-  display.setCursor(76, 56);
+  display.setCursor(76, 56 + yOffset);
   display.print("R:Play");
 
-  display.display();
+  if (commit) display.display();
+}
+
+// =============================================================
+// DOOR LOCK CONTROL SCREEN
+//
+// Clean layout:
+//   y  0      → "< Back" nav hint
+//   y  11     → separator
+//   y  14-28  → "DOOR LOCK" header (textSize 2)
+//   y  34-50  → Lock/Unlock icon + status
+//   y  56-63  → instruction hint
+//
+// doorStatus: 0 = idle, 1 = unlocked, -1 = locked, 2 = error
+// =============================================================
+inline void drawDoorLockScreen(int doorStatus = 0, int yOffset = 0, bool commit = true) {
+  if (commit) display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  // ── Nav hint ──────────────────────────────────────────
+  display.setTextSize(1);
+  display.setCursor(0, 0 + yOffset);
+  display.print("< Back");
+
+  // ── Separator ─────────────────────────────────────────
+  display.drawFastHLine(0, 11 + yOffset, 128, SSD1306_WHITE);
+
+  // ── Title ─────────────────────────────────────────────
+  display.setTextSize(2);
+  display.setCursor(10, 14 + yOffset);
+  display.print("DOOR LOCK");
+
+  // ── Center icon area ──────────────────────────────────
+  int cx = 64;
+  int cy = 44 + yOffset;
+
+  if (doorStatus == 1) {
+    // UNLOCKED: open padlock icon
+    // Lock body
+    display.drawRect(cx - 10, cy - 4, 20, 14, SSD1306_WHITE);
+    // Shackle (open - shifted right)
+    display.drawLine(cx + 5, cy - 4, cx + 5, cy - 10, SSD1306_WHITE);
+    display.drawLine(cx + 5, cy - 10, cx + 10, cy - 10, SSD1306_WHITE);
+    display.drawLine(cx + 10, cy - 10, cx + 10, cy - 4, SSD1306_WHITE);
+    // Label
+    display.setTextSize(1);
+    display.setCursor(86, cy);
+    display.print("Open");
+  } else if (doorStatus == -1) {
+    // LOCKED: closed padlock icon
+    // Lock body
+    display.fillRect(cx - 10, cy - 4, 20, 14, SSD1306_WHITE);
+    // Shackle (closed - centered)
+    display.drawLine(cx - 5, cy - 4, cx - 5, cy - 10, SSD1306_WHITE);
+    display.drawLine(cx - 5, cy - 10, cx + 5, cy - 10, SSD1306_WHITE);
+    display.drawLine(cx + 5, cy - 10, cx + 5, cy - 4, SSD1306_WHITE);
+    // Keyhole (black on white body)
+    display.fillCircle(cx, cy + 2, 2, SSD1306_BLACK);
+    // Label
+    display.setTextSize(1);
+    display.setCursor(82, cy);
+    display.print("Locked");
+  } else if (doorStatus == 2) {
+    // ERROR
+    display.setTextSize(1);
+    display.setCursor(cx - 20, cy - 4);
+    display.print("ERROR!");
+    display.setCursor(cx - 30, cy + 8);
+    display.print("Check WiFi");
+  } else {
+    // IDLE: outline padlock
+    display.drawRect(cx - 10, cy - 4, 20, 14, SSD1306_WHITE);
+    display.drawLine(cx - 5, cy - 4, cx - 5, cy - 10, SSD1306_WHITE);
+    display.drawLine(cx - 5, cy - 10, cx + 5, cy - 10, SSD1306_WHITE);
+    display.drawLine(cx + 5, cy - 10, cx + 5, cy - 4, SSD1306_WHITE);
+    display.fillCircle(cx, cy + 2, 2, SSD1306_WHITE);
+  }
+
+  // ── Bottom instruction ────────────────────────────────
+  display.setTextSize(1);
+  display.setCursor(4, 56 + yOffset);
+  display.print("L:Lock");
+  display.setCursor(80, 56 + yOffset);
+  display.print("R:Open");
+
+  if (commit) display.display();
 }
 
 inline void drawWakeScreen() {
