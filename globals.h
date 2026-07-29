@@ -37,6 +37,7 @@ enum AppState {
   STATE_TIMER_ENDED,
   STATE_OBS,           // OBS Play/Pause control
   STATE_DOORLOCK,      // Door Lock/Unlock control
+  STATE_STOPWATCH,     // Stopwatch triggered via HTTP endpoint
   STATE_ANIMATING_TO_STANDBY,
   STATE_ANIMATING_WAKE
 };
@@ -69,6 +70,11 @@ bool doorKeySent              = false;
 int  doorLastDirection        = 0;
 unsigned long doorLastRotateTime = 0;
 int  doorLastStatus           = 0;      // 0=idle, 1=unlocked, -1=locked, 2=error
+
+// --- Stopwatch Variables (HTTP-triggered) ---
+bool stopwatchRunning       = false;   // true while counting up
+unsigned long stopwatchStartMillis = 0; // millis() when started
+unsigned long stopwatchElapsed     = 0; // accumulated elapsed ms
 
 // --- WiFi Tracking ---
 bool wifiConnectedAtBoot = false;

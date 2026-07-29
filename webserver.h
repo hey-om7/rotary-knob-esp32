@@ -10,8 +10,12 @@
 
 extern WebServer server;  // Declare server if defined elsewhere
 
-
 extern Adafruit_SSD1306 display;
+
+// Externs needed for stopwatch endpoint handlers
+extern unsigned long lastActivityTime;
+extern volatile int counter;
+extern void drawMenu(int yOffset, bool commit);
 
 inline void handleRestart() {
   // Send the HTTP response first so the client isn't left hanging
@@ -51,6 +55,28 @@ inline void initWebserver() {
 
   // Register API endpoints
   server.on("/api/restart", HTTP_GET, handleRestart);
+
+  // Stopwatch endpoints
+  server.on("/api/stopwatch/start", HTTP_GET, []() {
+    stopwatchElapsed     = 0;
+    stopwatchStartMillis = millis();
+    stopwatchRunning     = true;
+    currentState         = STATE_STOPWATCH;
+    server.send(200, "application/json", "{\"status\":\"stopwatch_started\"}");
+    Serial.println("Stopwatch: Started via HTTP");
+  });
+
+  server.on("/api/stopwatch/stop", HTTP_GET, []() {
+    stopwatchRunning     = false;
+    stopwatchElapsed     = 0;
+    currentState         = STATE_MENU;
+    counter              = 0;
+    lastMenuSelection    = -1;
+    lastActivityTime     = millis();
+    drawMenu(0, true);
+    server.send(200, "application/json", "{\"status\":\"stopwatch_stopped\"}");
+    Serial.println("Stopwatch: Stopped via HTTP, back to menu");
+  });
 
   server.begin();
   Serial.println("HTTP server started.");

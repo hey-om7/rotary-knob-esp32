@@ -667,6 +667,75 @@ inline void drawTimerEndedScreen() {
   display.display();
 }
 
+// =============================================================
+// STOPWATCH SCREEN (HTTP-triggered, counts UP from 00:00)
+//
+// 128×64 layout:
+//   y  0-14  → Status bar: Lock/Unlock, WiFi, BT icons + time HH:MM AM/PM
+//   y  15    → separator line
+//   y  18-55 → Big MM:SS stopwatch counter (textSize 3), centred
+//   y  57-63 → "Stopwatch" label
+// =============================================================
+inline void drawStopwatchScreen() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  // ── Top status bar ────────────────────────────────────
+  // Lock/Unlock icon (leftmost)
+  drawLockIcon(0, 1);
+
+  // WiFi icon
+  bool wifiOn = (WiFi.status() == WL_CONNECTED);
+  drawWifiIcon(18, 1, wifiOn);
+
+  // BT icon
+  bool btOn = bleKeyboard.isConnected();
+  drawBTIcon(38, 1, btOn);
+
+  // Current time (HH:MM AM/PM) on right side of status bar
+  struct tm timeinfo;
+  bool timeValid = getTime(timeinfo);
+  if (timeValid) {
+    char timeBuf[6];
+    strftime(timeBuf, sizeof(timeBuf), "%I:%M", &timeinfo);
+    char ampm[3];
+    strftime(ampm, sizeof(ampm), "%p", &timeinfo);
+
+    display.setTextSize(1);
+    // Time: right-aligned
+    display.setCursor(82, 4);
+    display.print(timeBuf);
+    display.setCursor(113, 4);
+    display.print(ampm);
+  }
+
+  // Separator
+  display.drawFastHLine(0, 15, 128, SSD1306_WHITE);
+
+  // ── Stopwatch counter (MM:SS) ─────────────────────────
+  unsigned long elapsed = stopwatchElapsed;
+  if (stopwatchRunning) {
+    elapsed += (millis() - stopwatchStartMillis);
+  }
+  int totalSec = elapsed / 1000;
+  int mins = totalSec / 60;
+  int secs = totalSec % 60;
+
+  display.setTextSize(3);
+  char swBuf[6];
+  snprintf(swBuf, sizeof(swBuf), "%02d:%02d", mins, secs);
+  // textSize 3 = 18px wide per char, 5 chars + colon = ~90px → center at ~19
+  display.setCursor(19, 25);
+  display.print(swBuf);
+
+  // ── Bottom label ──────────────────────────────────────
+  display.setTextSize(1);
+  display.setCursor(34, 56);
+  display.print("Focus Mode");
+
+  display.display();
+}
+
 // --- UI Buzzer Variables ---
 unsigned long uiBuzzerEndTime = 0;
 bool uiBuzzerActive = false;

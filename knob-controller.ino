@@ -241,8 +241,8 @@ void loop() {
   }
   // ────────────────────────────────────────────────────────────
 
-  // ── Long-press: always return to Main Menu ────────────────
-  if (buttonLongPressed) {
+  // ── Long-press: always return to Main Menu (except during HTTP stopwatch) ──
+  if (buttonLongPressed && currentState != STATE_STOPWATCH) {
     buttonLongPressed = false;
     buttonPressed     = false;
     digitalWrite(BUZZER_PIN, LOW);
@@ -661,6 +661,21 @@ void loop() {
       enteredStandbyFromOBS      = false;
       lastStandbyCounter = counter;
       lastStandbyUpdate  = 0;
+    }
+  }
+
+
+
+  // ── STATE: STOPWATCH (HTTP-triggered, counts up) ───────────
+  else if (currentState == STATE_STOPWATCH) {
+    // Consume button presses — stopwatch is HTTP-controlled only
+    buttonPressed     = false;
+    buttonLongPressed = false;
+
+    // Refresh display every second to update the counter
+    if (millis() - lastDisplayUpdate >= 1000) {
+      drawStopwatchScreen();
+      lastDisplayUpdate = millis();
     }
   }
 
