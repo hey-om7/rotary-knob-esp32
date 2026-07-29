@@ -16,6 +16,8 @@ bool configReceived = false;
  */
 bool connectToWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.persistent(true);        // Keep credentials in NVS across reboots
+  WiFi.setAutoReconnect(true);  // Let the driver reconnect on its own (fast, low-level)
   WiFi.begin(); // Uses credentials stored in NVS automatically
 
   Serial.println("Attempting to connect to saved WiFi...");

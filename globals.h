@@ -11,7 +11,7 @@
 
 #define STANDBY_TIMEOUT_MS         10000UL  // Standby mode after 10 seconds
 #define CONFIG_PORTAL_TIMEOUT_MS   60000UL  // 60s timeout for WiFi config portal
-#define WIFI_RECONNECT_INTERVAL_MS 30000UL  // 30s between WiFi reconnect attempts
+#define WIFI_RECONNECT_INTERVAL_MS 10000UL  // 10s between manual WiFi reconnect attempts
 
 const char* ipServer = "192.168.1.100";
 

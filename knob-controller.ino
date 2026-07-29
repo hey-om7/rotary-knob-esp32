@@ -65,6 +65,16 @@ bool getTime(struct tm &timeinfo) {
 }
 
 // =============================================================
+// NTP CONFIG  (re-callable — starts/restarts the SNTP client)
+// Safe to call whenever WiFi (re)connects. Non-blocking: SNTP
+// syncs in the background; getTime()/cache handles the wait.
+// =============================================================
+void configureNTP() {
+  configTime(UTC_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
+  Serial.println("NTP (re)configured — waiting for background sync.");
+}
+
+// =============================================================
 // BUZZER HELPERS
 // =============================================================
 
@@ -150,7 +160,7 @@ void setup() {
   // PHASE 6: NTP time sync (skip if offline)
   if (WiFi.status() == WL_CONNECTED) {
     drawBootProgress("Syncing clock...", 75);
-    configTime(UTC_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
+    configureNTP();
     Serial.println("Waiting for NTP time sync...");
     struct tm timeinfo;
     if (getLocalTime(&timeinfo, 5000)) {
@@ -163,7 +173,7 @@ void setup() {
       Serial.println("NTP sync failed — cache helper will retry.");
     }
   } else {
-    Serial.println("No WiFi — skipping NTP sync.");
+    Serial.println("No WiFi — NTP will start automatically once WiFi connects.");
   }
 
   // PHASE 7: BLE keyboard
@@ -203,16 +213,33 @@ void loop() {
   server.handleClient();
   checkHourlyChime();
 
-  // ── WiFi auto-reconnect (non-blocking) ──────────────────────
+  // ── WiFi auto-reconnect + NTP (re)sync on connection ────────
+  // Fixes two interconnected issues:
+  //  1. Reconnect no longer gated by wifiConnectedAtBoot, so the
+  //     module connects even if it booted while the router was down.
+  //  2. NTP is (re)configured on every fresh connection, so the
+  //     clock works whenever WiFi comes up — not only at boot.
   {
     static unsigned long lastWifiCheck = 0;
-    if (wifiConnectedAtBoot &&
-        WiFi.status() != WL_CONNECTED &&
-        millis() - lastWifiCheck >= WIFI_RECONNECT_INTERVAL_MS) {
+    static bool wifiWasConnected = false;
+    bool wifiNow = (WiFi.status() == WL_CONNECTED);
+
+    // Detect a fresh connection edge (boot-up OR reconnect)
+    if (wifiNow && !wifiWasConnected) {
+      Serial.println("WiFi connected — starting NTP sync.");
+      configureNTP();
+      lastChimeHour = -1;  // allow chime re-baseline after time re-syncs
+    }
+    wifiWasConnected = wifiNow;
+
+    // While disconnected, retry periodically (backup to driver auto-reconnect)
+    if (!wifiNow && millis() - lastWifiCheck >= WIFI_RECONNECT_INTERVAL_MS) {
       lastWifiCheck = millis();
-      Serial.println("WiFi lost. Attempting reconnect...");
-      WiFi.disconnect();
-      WiFi.begin();
+      Serial.println("WiFi down. Attempting reconnect...");
+      // reconnect() reuses stored credentials; fall back to begin() if idle
+      if (!WiFi.reconnect()) {
+        WiFi.begin();
+      }
     }
   }
 
