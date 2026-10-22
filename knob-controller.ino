@@ -46,7 +46,7 @@ unsigned long cachedTimeMillis = 0;
 // TIME HELPER  (cache-aware, never flickers back to "No Time")
 // =============================================================
 bool getTime(struct tm &timeinfo) {
-  if (getLocalTime(&timeinfo, 1000)) {
+  if (getLocalTime(&timeinfo, 10)) {  // 10ms max — avoid blocking the web server
     cachedTimeinfo   = timeinfo;
     cachedTimeMillis = millis();
     ntpEverSynced    = true;
@@ -323,7 +323,7 @@ void loop() {
       drawStandbyScreen();
       lastStandbyUpdate = millis();
     }
-    delay(10);
+    delay(1);
     return;
   }
 
@@ -771,5 +771,5 @@ void loop() {
     }
   }
 
-  delay(10);
+  delay(1);  // Yield to WiFi/RTOS tasks without blocking the server
 }

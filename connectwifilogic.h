@@ -18,6 +18,16 @@ bool connectToWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.persistent(true);        // Keep credentials in NVS across reboots
   WiFi.setAutoReconnect(true);  // Let the driver reconnect on its own (fast, low-level)
+
+  // Static IP for fast HTTP access (no mDNS lookup delay)
+  // Change these to match your network if needed
+  IPAddress localIP(192, 168, 1, 80);
+  IPAddress gateway(192, 168, 1, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  IPAddress dns1(8, 8, 8, 8);
+  IPAddress dns2(8, 8, 4, 4);
+  WiFi.config(localIP, gateway, subnet, dns1, dns2);
+
   WiFi.begin(); // Uses credentials stored in NVS automatically
 
   Serial.println("Attempting to connect to saved WiFi...");
