@@ -299,10 +299,10 @@ void loop() {
     static unsigned long lastHeartbeat = 0;
     if (millis() - lastHeartbeat >= 60000UL) {
       lastHeartbeat = millis();
-      RLOGD("SYS", "heartbeat up=%lus heap=%u minHeap=%u rssi=%d state=%d ble=%d mqtt=%d",
+      RLOGD("SYS", "heartbeat up=%lus heap=%u minHeap=%u rssi=%d state=%d ble=%d mqtt=%d rlogStack=%u",
             millis() / 1000UL, ESP.getFreeHeap(), ESP.getMinFreeHeap(),
             WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0, (int)currentState,
-            (int)bleNow, (int)RemoteLog::connected());
+            (int)bleNow, (int)RemoteLog::connected(), RemoteLog::taskStackFree());
     }
   }
 

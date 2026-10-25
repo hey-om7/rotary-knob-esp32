@@ -8,15 +8,34 @@
  *     up (boot, Wi-Fi portal, ...) are buffered and sent once MQTT connects.
  *   - flush(): push buffered lines out before ESP.restart() (OTA, /api/restart).
  *   - RLOG_SERIAL_PREFIX: optional local-only Serial prefix (default none).
+ *   - connection supervision (below).
  *
  * Connects to the broker built into the FirmwareManager backend and:
  *   - ships log lines in batches to   fm/<mac>/log     (QoS 1)
  *   - reports fw + levels on          fm/<mac>/status  (retained; LWT = offline)
  *   - applies log-level commands from fm/<mac>/cmd     (retained, from the console)
+ *   - sends a liveness ping "1" to    fm/<mac>/ping    (QoS 1, every 20 s)
  *
- * Levels are per channel and independent: the console can switch any mix of
- * error / warn / info / debug on for remote and for USB serial. Defaults:
- * serial = all levels, remote = error + warn + info.
+ * Connection supervision — recovers after a server restart without a reboot.
+ * All of it runs in the flush task (never the MQTT event handler, which only
+ * records timestamps / error codes), so esp-mqtt is never blocked:
+ *   1. Liveness: while connected, ping every 20 s. Any PUBACK / SUBACK / DATA
+ *      counts as "heard from server". Silent for 45 s -> disconnect + reconnect
+ *      (catches half-open TCP after the server restarts / Render redeploys).
+ *   2. MQTT keepalive 30 s.
+ *   3. Offline for 2 min of retries with Wi-Fi up -> destroy and rebuild the
+ *      client with the same config (fresh transport / TLS state); repeats
+ *      every 2 min while still offline.
+ *   4. MQTT_EVENT_ERROR -> error_type, esp_tls_last_esp_err,
+ *      esp_transport_sock_errno, connect_return_code and the largest free
+ *      8-bit heap block are printed to Serial.
+ *   5. Wi-Fi got an IP again -> reconnect immediately.
+ *   6. Last resort: offline > 10 min with Wi-Fi up -> reason saved in NVS,
+ *      logged, ESP.restart(). The reason is logged again after the reboot.
+ *      To avoid a reboot loop this only fires if MQTT has connected at least
+ *      once since boot, and not while the broker is actively refusing us
+ *      (wrong password / unregistered device: a restart can't fix that).
+ *   Time spent paused (OTA) or with Wi-Fi down does not count toward 3 and 6.
  *
  * <mac> is the Wi-Fi STA MAC as 12 lowercase hex digits; client id "fm-<mac>".
  * The device must be registered in the console (Devices) with that MAC.
@@ -36,6 +55,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <esp_idf_version.h>
 #include <mqtt_client.h>
 
@@ -70,6 +90,15 @@ static constexpr uint32_t kFlushMs = 2000;       // max delay before a batch is 
 static constexpr uint8_t kDefaultRemote = 0x07;  // error + warn + info
 static constexpr uint8_t kDefaultSerial = kAllLevels;  // USB serial: everything
 
+// Connection supervision (see header comment)
+static constexpr int kKeepaliveSec = 30;
+static constexpr uint32_t kPingMs = 20000;           // liveness ping interval while connected
+static constexpr uint32_t kSilentMs = 45000;         // nothing heard for this long -> reconnect
+static constexpr uint32_t kReconnectRetryMs = 5000;  // keep retrying reconnect() this long after a kick
+static constexpr uint32_t kRebuildMs = 120000;       // offline (Wi-Fi up) -> rebuild client, repeat
+static constexpr uint32_t kRestartMs = 600000;       // offline (Wi-Fi up) -> ESP.restart()
+static constexpr uint32_t kTaskStack = 4096;         // flush task (was 3072): + NVS, printf, rebuild
+
 // ----------------------------------------------------------------------------
 // State. Header-only and C++11-safe (core 2.x builds with gnu++11): a
 // function-local static in an inline function is one instance program-wide.
@@ -90,8 +119,30 @@ struct State {
   uint32_t dropped = 0;  // lines discarded while offline / overflowing
   char id[13];
   char clientId[16];
-  char tLog[24], tStatus[24], tCmd[24];
+  char tLog[24], tStatus[24], tCmd[24], tPing[24];
   char fw[33];
+
+  // --- kept for client rebuilds (esp_mqtt_client_init copies, but we re-init) ---
+  esp_mqtt_client_config_t cfg;  // zero-initialised (static storage)
+  char uri[128], user[48], pass[64];
+
+  // --- supervision; written by the flush task unless marked volatile ---
+  volatile uint32_t lastHeard = 0;  // millis() of last CONNACK/PUBACK/SUBACK/DATA (MQTT task)
+  volatile bool gotIp = false;      // set by the Wi-Fi event task
+  volatile bool everConnected = false;
+  volatile bool refused = false;    // last error was CONNECTION_REFUSED (cleared on connect)
+  uint32_t lastPing = 0;
+  bool offline = false;             // in an offline-with-Wi-Fi-up period
+  uint32_t offlineSince = 0;
+  uint32_t rebuildAt = 0;           // start of the current 2-minute rebuild window
+  bool reconnectPending = false;
+  uint32_t reconnectUntil = 0;
+
+  // --- last MQTT_EVENT_ERROR: captured by the handler, printed by the flush task ---
+  volatile bool errPending = false;
+  volatile uint32_t errCount = 0;
+  int errType = 0, errSock = 0, errRc = 0;
+  esp_err_t errTls = ESP_OK;
 };
 inline State &S() {
   static State s;
@@ -115,6 +166,9 @@ inline char levelLetter(Level l) {
     default: return 'I';
   }
 }
+
+// Defined at the bottom; used by the supervision code to log its decisions.
+inline void log(Level level, const char *tag, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 
 // ----------------------------------------------------------------------------
 // Internals
@@ -184,14 +238,14 @@ inline int levelsJson(char *out, size_t cap, uint8_t mask) {
 }
 
 /** Retained status: the server shows these as the device's applied levels. */
-inline void publishStatus() {
-  if (!S().client) return;
+inline void publishStatus(esp_mqtt_client_handle_t c) {
+  if (!c) return;
   char r[48], s[48], json[160];
   levelsJson(r, sizeof r, S().remote);
   levelsJson(s, sizeof s, S().serial);
   int n = snprintf(json, sizeof json, "{\"state\":\"online\",\"fw\":\"%s\",\"remote\":%s,\"serial\":%s}", S().fw, r, s);
   // enqueue = non-blocking, safe from any task including the MQTT event handler.
-  esp_mqtt_client_enqueue(S().client, S().tStatus, json, n, 1, 1, true);
+  esp_mqtt_client_enqueue(c, S().tStatus, json, n, 1, 1, true);
 }
 
 inline void saveLevels() {
@@ -203,19 +257,35 @@ inline void saveLevels() {
   }
 }
 
-inline void loadLevels() {
+/**
+ * Loads levels and takes (reads + clears) the reason saved before a watchdog
+ * restart, if any. Read-write so the namespace is created on first boot (a
+ * read-only open of a missing namespace prints an NVS error on every boot).
+ */
+inline void loadLevels(char *restartNote, size_t noteCap) {
+  restartNote[0] = '\0';
   Preferences p;
-  // Read-write so the namespace is created on first boot (a read-only open of
-  // a missing namespace fails and prints an NVS error on every boot).
   if (p.begin("rlog", false)) {
     S().remote = p.getUChar("rmask", kDefaultRemote) & kAllLevels;
     S().serial = p.getUChar("smask", kDefaultSerial) & kAllLevels;
+    if (p.isKey("rst")) {
+      p.getString("rst", restartNote, noteCap);
+      p.remove("rst");
+    }
+    p.end();
+  }
+}
+
+inline void saveRestartNote(const char *note) {
+  Preferences p;
+  if (p.begin("rlog", false)) {
+    p.putString("rst", note);
     p.end();
   }
 }
 
 /** {"remote":["error","warn"],"serial":[]} — keys optional. Empty = cleared, ignore. */
-inline void applyCommand(const char *json) {
+inline void applyCommand(esp_mqtt_client_handle_t c, const char *json) {
   uint8_t r = S().remote, s = S().serial;
   // Parse both keys (no short-circuit): either one may be present.
   const bool hasRemote = jsonLevels(json, "remote", r);
@@ -225,26 +295,39 @@ inline void applyCommand(const char *json) {
   S().remote = r;
   S().serial = s;
   if (changed) saveLevels();
-  publishStatus();  // always confirm, so the console shows "synced"
+  publishStatus(c);  // always confirm, so the console shows "synced"
 }
 
+/**
+ * Runs in the esp-mqtt task: only cheap bookkeeping, no blocking calls.
+ * Uses the event's own client handle (S().client is nulled during a rebuild).
+ */
 inline void onEvent(void *, esp_event_base_t, int32_t id, void *data) {
   auto *e = static_cast<esp_mqtt_event_handle_t>(data);
   switch (static_cast<esp_mqtt_event_id_t>(id)) {
     case MQTT_EVENT_CONNECTED:
       S().connected = true;
+      S().everConnected = true;
+      S().refused = false;
+      S().lastHeard = millis();
 #if ESP_IDF_VERSION_MAJOR >= 5
-      esp_mqtt_client_subscribe_single(S().client, S().tCmd, 1);
+      esp_mqtt_client_subscribe_single(e->client, S().tCmd, 1);
 #else
-      esp_mqtt_client_subscribe(S().client, S().tCmd, 1);
+      esp_mqtt_client_subscribe(e->client, S().tCmd, 1);
 #endif
-      publishStatus();
+      publishStatus(e->client);
       if (S().task) xTaskNotifyGive(S().task);  // send whatever piled up
       break;
     case MQTT_EVENT_DISCONNECTED:
       S().connected = false;
+      if (S().task) xTaskNotifyGive(S().task);
+      break;
+    case MQTT_EVENT_PUBLISHED:
+    case MQTT_EVENT_SUBSCRIBED:
+      S().lastHeard = millis();
       break;
     case MQTT_EVENT_DATA: {
+      S().lastHeard = millis();
       // Commands are tiny (server caps them at 96 bytes) and never fragmented.
       size_t tl = strlen(S().tCmd);
       if (e->topic_len == static_cast<int>(tl) && strncmp(e->topic, S().tCmd, tl) == 0 && e->current_data_offset == 0 &&
@@ -252,21 +335,153 @@ inline void onEvent(void *, esp_event_base_t, int32_t id, void *data) {
         char cmd[128];
         memcpy(cmd, e->data, e->data_len);
         cmd[e->data_len] = '\0';
-        applyCommand(cmd);
+        applyCommand(e->client, cmd);
       }
       break;
     }
+    case MQTT_EVENT_ERROR:
+      if (e->error_handle) {
+        S().errType = static_cast<int>(e->error_handle->error_type);
+        S().errTls = e->error_handle->esp_tls_last_esp_err;
+        S().errSock = e->error_handle->esp_transport_sock_errno;
+        S().errRc = static_cast<int>(e->error_handle->connect_return_code);
+        S().refused = e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED;
+      }
+      ++S().errCount;
+      S().errPending = true;
+      if (S().task) xTaskNotifyGive(S().task);
+      break;
     default:
       break;
   }
 }
 
-/** Sends the buffered batch. Never holds S().lock while calling into esp-mqtt. */
+/** Arduino Wi-Fi event task: just flag it; the flush task does the reconnect. */
+inline void onWifiGotIp(arduino_event_id_t) {
+  S().gotIp = true;
+  if (S().task) xTaskNotifyGive(S().task);
+}
+
+inline void printError() {
+  S().errPending = false;
+  Serial.printf("[E][RLOG] MQTT error #%u: type=%d tls_err=0x%x sock_errno=%d connect_rc=%d largest_free=%u\n",
+                static_cast<unsigned>(S().errCount), S().errType, static_cast<unsigned>(S().errTls), S().errSock,
+                S().errRc, static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+}
+
+/** init + register + start with the stored config. Flush task / begin() only. */
+inline bool startClient() {
+  S().client = esp_mqtt_client_init(&S().cfg);
+  if (!S().client) return false;
+  esp_mqtt_client_register_event(S().client, MQTT_EVENT_ANY, onEvent, nullptr);
+  return esp_mqtt_client_start(S().client) == ESP_OK;
+}
+
+/** Full teardown + rebuild for a fresh transport / TLS state. Flush task only. */
+inline void rebuildClient() {
+  log(WARN, "RLOG", "MQTT offline %us with Wi-Fi up - rebuilding client (largest_free=%u)",
+      static_cast<unsigned>((millis() - S().offlineSince) / 1000),
+      static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+  S().connected = false;
+  S().reconnectPending = false;
+  if (S().client) {
+    esp_mqtt_client_handle_t old = S().client;
+    S().client = nullptr;  // publishStatus() and friends skip a null client
+    esp_mqtt_client_stop(old);
+    esp_mqtt_client_destroy(old);
+  }
+  S().connected = false;  // the old task may have flipped it while stopping
+  if (!startClient()) Serial.printf("[E][RLOG] MQTT client rebuild failed, retry in %us\n", (unsigned)(kRebuildMs / 1000));
+}
+
+/** Ask esp-mqtt to (re)connect now; retried each tick until it accepts. */
+inline void kickReconnect(uint32_t now) {
+  S().reconnectPending = true;
+  S().reconnectUntil = now + kReconnectRetryMs;
+}
+
+/**
+ * Connection supervision, once per flush-task wake-up (<= every 250 ms).
+ * A handful of comparisons in the common case; client calls are rare.
+ */
+inline void supervise() {
+  const uint32_t now = millis();
+  if (S().errPending) printError();
+
+  if (S().gotIp) {
+    S().gotIp = false;
+    if (S().client && !S().connected) kickReconnect(now);
+  }
+
+  // esp_mqtt_client_reconnect() returns ESP_FAIL until the client has reached
+  // its wait-reconnect state (e.g. right after disconnect()), so keep trying
+  // briefly. If it never accepts, esp-mqtt's own 5 s auto-reconnect still runs.
+  if (S().reconnectPending) {
+    if (S().connected || (S().client && esp_mqtt_client_reconnect(S().client) == ESP_OK) ||
+        static_cast<int32_t>(now - S().reconnectUntil) >= 0)
+      S().reconnectPending = false;
+  }
+
+  if (S().paused || !S().client) return;
+
+  if (S().connected) {
+    S().offline = false;
+    // 1. Liveness ping. enqueue = non-blocking; the MQTT task sends it.
+    if (now - S().lastPing >= kPingMs) {
+      S().lastPing = now;
+      esp_mqtt_client_enqueue(S().client, S().tPing, "1", 1, 1, 0, true);
+    }
+    if (now - S().lastHeard >= kSilentMs) {
+      log(WARN, "RLOG", "No reply from server for %us - forcing MQTT reconnect",
+          static_cast<unsigned>((now - S().lastHeard) / 1000));
+      S().connected = false;  // stop publishing into a dead link right away
+      S().lastHeard = now;
+      esp_mqtt_client_disconnect(S().client);
+      kickReconnect(now);
+    }
+    return;
+  }
+
+  // Offline: only count time while Wi-Fi is actually up.
+  if (WiFi.status() != WL_CONNECTED) {
+    S().offline = false;
+    return;
+  }
+  if (!S().offline) {
+    S().offline = true;
+    S().offlineSince = now;
+    S().rebuildAt = now;
+    return;
+  }
+
+  // 3. Rebuild after 2 min of failed retries, then every 2 min.
+  if (now - S().rebuildAt >= kRebuildMs) {
+    S().rebuildAt = now;
+    rebuildClient();
+    return;
+  }
+
+  // 6. Last resort.
+  if (now - S().offlineSince >= kRestartMs && S().everConnected && !S().refused) {
+    char note[96];
+    snprintf(note, sizeof note, "MQTT offline %us with Wi-Fi up (errors=%u, last type=%d sock_errno=%d)",
+             static_cast<unsigned>((now - S().offlineSince) / 1000), static_cast<unsigned>(S().errCount),
+             S().errType, S().errSock);
+    saveRestartNote(note);
+    log(ERROR, "RLOG", "Restarting: %s", note);
+    Serial.flush();
+    delay(100);
+    ESP.restart();
+  }
+}
+
+/** Sends buffered batches and supervises the connection. Never holds S().lock while calling into esp-mqtt. */
 inline void flushTask(void *) {
   static char out[kBatchBytes + 1];
   for (;;) {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
-    if (!S().connected || S().paused) continue;
+    supervise();
+    if (!S().connected || S().paused || !S().client) continue;
 
     size_t n = 0;
     uint32_t dropped = 0;
@@ -331,16 +546,19 @@ inline void enqueueLine(const char *line, size_t len) {
  */
 inline void init() {
   if (S().lock) return;
-  detail::loadLevels();
+  char note[96];
+  detail::loadLevels(note, sizeof note);
   S().lock = xSemaphoreCreateMutex();
+  if (note[0]) log(WARN, "RLOG", "Previous restart by RemoteLog watchdog: %s", note);
 }
 
 /**
  * Start the MQTT client. Call once Wi-Fi is connected (calling again is a
  * no-op). The client reconnects by itself after Wi-Fi or server drops.
  *
- * rootCaPem: optional PEM to pin a specific CA; nullptr = built-in CA bundle
- * (recommended for wss:// on Render). Ignored for ws:// and mqtt://.
+ * uri / username / password are copied. rootCaPem (optional PEM to pin a CA;
+ * nullptr = built-in CA bundle, recommended for Render) is NOT copied and must
+ * stay valid for the program's lifetime, since the client may be rebuilt.
  */
 inline bool begin(const char *uri, const char *username, const char *password, const char *fwVersion,
                   const char *rootCaPem = nullptr) {
@@ -355,47 +573,52 @@ inline bool begin(const char *uri, const char *username, const char *password, c
   snprintf(S().tLog, sizeof S().tLog, "fm/%s/log", S().id);
   snprintf(S().tStatus, sizeof S().tStatus, "fm/%s/status", S().id);
   snprintf(S().tCmd, sizeof S().tCmd, "fm/%s/cmd", S().id);
+  snprintf(S().tPing, sizeof S().tPing, "fm/%s/ping", S().id);
   snprintf(S().fw, sizeof S().fw, "%s", fwVersion ? fwVersion : "");
+  snprintf(S().uri, sizeof S().uri, "%s", uri ? uri : "");
+  snprintf(S().user, sizeof S().user, "%s", username ? username : "");
+  snprintf(S().pass, sizeof S().pass, "%s", password ? password : "");
 
   static const char kOffline[] = "{\"state\":\"offline\"}";
-  const bool tls = strncmp(uri, "wss://", 6) == 0 || strncmp(uri, "mqtts://", 8) == 0;
+  const bool tls = strncmp(S().uri, "wss://", 6) == 0 || strncmp(S().uri, "mqtts://", 8) == 0;
 
-  esp_mqtt_client_config_t cfg = {};
+  esp_mqtt_client_config_t &cfg = S().cfg;
+  cfg = esp_mqtt_client_config_t();
 #if ESP_IDF_VERSION_MAJOR >= 5
-  cfg.broker.address.uri = uri;
+  cfg.broker.address.uri = S().uri;
   if (tls) {
     if (rootCaPem) cfg.broker.verification.certificate = rootCaPem;
     else cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
   }
   cfg.credentials.client_id = S().clientId;
-  cfg.credentials.username = username;
-  cfg.credentials.authentication.password = password;
+  cfg.credentials.username = S().user;
+  cfg.credentials.authentication.password = S().pass;
   cfg.session.last_will.topic = S().tStatus;
   cfg.session.last_will.msg = kOffline;
   cfg.session.last_will.msg_len = sizeof(kOffline) - 1;
   cfg.session.last_will.qos = 1;
   cfg.session.last_will.retain = 1;
-  cfg.session.keepalive = 60;  // server marks the device offline ~90 s after it vanishes
+  cfg.session.keepalive = kKeepaliveSec;
   cfg.network.reconnect_timeout_ms = 5000;
   cfg.network.timeout_ms = 15000;
   cfg.buffer.size = 1536;
   cfg.buffer.out_size = 2048;
   cfg.task.stack_size = 6144;
 #else
-  cfg.uri = uri;
+  cfg.uri = S().uri;
   if (tls) {
     if (rootCaPem) cfg.cert_pem = rootCaPem;
     else cfg.crt_bundle_attach = esp_crt_bundle_attach;
   }
   cfg.client_id = S().clientId;
-  cfg.username = username;
-  cfg.password = password;
+  cfg.username = S().user;
+  cfg.password = S().pass;
   cfg.lwt_topic = S().tStatus;
   cfg.lwt_msg = kOffline;
   cfg.lwt_msg_len = sizeof(kOffline) - 1;
   cfg.lwt_qos = 1;
   cfg.lwt_retain = 1;
-  cfg.keepalive = 60;
+  cfg.keepalive = kKeepaliveSec;
   cfg.reconnect_timeout_ms = 5000;
   cfg.network_timeout_ms = 15000;
   cfg.buffer_size = 1536;
@@ -403,15 +626,20 @@ inline bool begin(const char *uri, const char *username, const char *password, c
   cfg.task_stack = 6144;
 #endif
 
-  S().client = esp_mqtt_client_init(&cfg);
-  if (!S().client) return false;
-  esp_mqtt_client_register_event(S().client, MQTT_EVENT_ANY, detail::onEvent, nullptr);
-  xTaskCreate(detail::flushTask, "rlog", 3072, nullptr, 2, &S().task);
-  return esp_mqtt_client_start(S().client) == ESP_OK;
+  WiFi.onEvent(detail::onWifiGotIp, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  // Start the client before the task so the task never sees a half-built handle.
+  const bool ok = detail::startClient();
+  xTaskCreate(detail::flushTask, "rlog", kTaskStack, nullptr, 2, &S().task);
+  return ok;
 }
 
 /** Pause sending during heavy work (OTA, big uploads). Lines keep buffering. */
 inline void pause(bool paused) {
+  if (!paused) {
+    // Paused time must not count as silence / offline time.
+    S().lastHeard = millis();
+    S().offline = false;
+  }
   S().paused = paused;
   if (!paused && S().task) xTaskNotifyGive(S().task);
 }
@@ -423,7 +651,7 @@ inline void pause(bool paused) {
  */
 inline bool flush(uint32_t timeoutMs = 3000) {
   if (!S().client || !S().task) return false;
-  S().paused = false;
+  pause(false);
   S().force = true;
   const uint32_t start = millis();
   bool done = false;
@@ -445,6 +673,10 @@ inline bool connected() { return S().connected; }
 inline uint8_t remoteLevels() { return S().remote; }
 inline uint8_t serialLevels() { return S().serial; }
 inline const char *deviceId() { return S().id; }
+/** Unused stack of the flush/supervisor task in bytes (0 before begin()). */
+inline unsigned taskStackFree() {
+  return S().task ? static_cast<unsigned>(uxTaskGetStackHighWaterMark(S().task)) * sizeof(StackType_t) : 0;
+}
 
 /** Core logger. Prefer the RLOGx macros below. */
 inline void logv(Level level, const char *tag, const char *fmt, va_list ap) {
@@ -473,7 +705,6 @@ inline void logv(Level level, const char *tag, const char *fmt, va_list ap) {
   if (toRemote) detail::enqueueLine(line, len);
 }
 
-inline void log(Level level, const char *tag, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 inline void log(Level level, const char *tag, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
