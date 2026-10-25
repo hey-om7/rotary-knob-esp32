@@ -71,7 +71,38 @@ bool getTime(struct tm &timeinfo) {
 // =============================================================
 void configureNTP() {
   configTime(UTC_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
-  Serial.println("NTP (re)configured — waiting for background sync.");
+  RLOGI("NTP", "NTP (re)configured - waiting for background sync.");
+}
+
+// =============================================================
+// REMOTE LOGGING (MQTT -> FirmwareManager console)
+// Lines logged before this are buffered (newest ~1 KB) and sent
+// once the broker connects. Safe to call repeatedly: only the
+// first call (with WiFi up, so the MAC is valid) starts it.
+// =============================================================
+const char* resetReasonName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:  return "power-on";
+    case ESP_RST_SW:       return "software";
+    case ESP_RST_PANIC:    return "panic";
+    case ESP_RST_INT_WDT:  return "int-wdt";
+    case ESP_RST_TASK_WDT: return "task-wdt";
+    case ESP_RST_WDT:      return "wdt";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep";
+    default:               return "other";
+  }
+}
+
+void startRemoteLogging() {
+  static bool started = false;
+  if (started || WiFi.status() != WL_CONNECTED) return;
+  started = RemoteLog::begin(MQTT_BROKER_URI, MQTT_USERNAME, MQTT_PASSWORD, CURRENT_VERSION.c_str());
+  if (started) {
+    RLOGI("RLOG", "Remote logging started id=%s broker=%s", RemoteLog::deviceId(), MQTT_BROKER_URI);
+  } else {
+    RLOGE("RLOG", "Remote logging failed to start (broker=%s)", MQTT_BROKER_URI);
+  }
 }
 
 // =============================================================
@@ -106,7 +137,9 @@ void playHourlyChime() {
 void setup() {
   Serial.begin(115200);
   delay(250);
-  Serial.println("Knobby OS — Booting");
+  RemoteLog::init();  // start buffering log lines for the console right away
+  RLOGI("BOOT", "Knob Controller booting - reset=%s heap=%u",
+        resetReasonName(esp_reset_reason()), ESP.getFreeHeap());
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
@@ -141,13 +174,17 @@ void setup() {
     stopConfigPortal();
 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("WiFi configured via portal!");
+      RLOGI("WIFI", "WiFi configured via portal!");
     } else {
-      Serial.println("Portal timed out. Continuing in offline mode.");
+      RLOGW("WIFI", "Portal timed out. Continuing in offline mode.");
     }
   }
 
   wifiConnectedAtBoot = (WiFi.status() == WL_CONNECTED);
+
+  // PHASE 3b: Remote logging (needs WiFi; otherwise started on first connect in loop())
+  startRemoteLogging();
+  RLOGI("BOOT", "fw=%s mac=%s", CURRENT_VERSION.c_str(), WiFi.macAddress().c_str());
 
   // PHASE 4: OTA firmware update check
   drawBootProgress("Checking updates...", 50);
@@ -161,19 +198,18 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     drawBootProgress("Syncing clock...", 75);
     configureNTP();
-    Serial.println("Waiting for NTP time sync...");
     struct tm timeinfo;
     if (getLocalTime(&timeinfo, 5000)) {
-      Serial.println("NTP synced OK.");
+      RLOGI("NTP", "NTP synced OK.");
       cachedTimeinfo   = timeinfo;
       cachedTimeMillis = millis();
       ntpEverSynced    = true;
       lastChimeHour    = timeinfo.tm_hour;
     } else {
-      Serial.println("NTP sync failed — cache helper will retry.");
+      RLOGW("NTP", "NTP sync failed - cache helper will retry.");
     }
   } else {
-    Serial.println("No WiFi — NTP will start automatically once WiFi connects.");
+    RLOGW("NTP", "No WiFi - NTP will start automatically once WiFi connects.");
   }
 
   // PHASE 7: BLE keyboard
@@ -188,6 +224,8 @@ void setup() {
   counter          = 0;
   lastActivityTime = millis();
 
+  RLOGI("BOOT", "Boot complete - wifi=%s heap=%u",
+        WiFi.status() == WL_CONNECTED ? "up" : "down", ESP.getFreeHeap());
   drawMenu();
 }
 
@@ -202,7 +240,7 @@ void checkHourlyChime() {
   if (timeinfo.tm_min == 0 && timeinfo.tm_sec == 0 && currentHour != lastChimeHour) {
     lastChimeHour = currentHour;
     playHourlyChime();
-    Serial.printf("Hourly chime: %02d:00\n", currentHour);
+    RLOGI("UI", "Hourly chime: %02d:00", currentHour);
   }
 }
 
@@ -226,20 +264,44 @@ void loop() {
 
     // Detect a fresh connection edge (boot-up OR reconnect)
     if (wifiNow && !wifiWasConnected) {
-      Serial.println("WiFi connected — starting NTP sync.");
+      RLOGI("WIFI", "WiFi connected ip=%s rssi=%d - starting NTP sync.",
+            WiFi.localIP().toString().c_str(), WiFi.RSSI());
       configureNTP();
+      startRemoteLogging();  // no-op if already running (esp-mqtt reconnects itself)
       lastChimeHour = -1;  // allow chime re-baseline after time re-syncs
+    } else if (!wifiNow && wifiWasConnected) {
+      RLOGW("WIFI", "WiFi lost (status=%d)", (int)WiFi.status());
     }
     wifiWasConnected = wifiNow;
 
     // While disconnected, retry periodically (backup to driver auto-reconnect)
     if (!wifiNow && millis() - lastWifiCheck >= WIFI_RECONNECT_INTERVAL_MS) {
       lastWifiCheck = millis();
-      Serial.println("WiFi down. Attempting reconnect...");
+      RLOGW("WIFI", "WiFi down. Attempting reconnect...");
       // reconnect() reuses stored credentials; fall back to begin() if idle
       if (!WiFi.reconnect()) {
         WiFi.begin();
       }
+    }
+  }
+
+  // ── BLE pairing edges + periodic health line ────────────────
+  {
+    static bool bleWasConnected = false;
+    bool bleNow = bleKeyboard.isConnected();
+    if (bleNow != bleWasConnected) {
+      RLOGI("BLE", "Keyboard %s", bleNow ? "connected" : "disconnected");
+      bleWasConnected = bleNow;
+    }
+
+    // Only reaches the console when Devices -> Logging sets remote=debug
+    static unsigned long lastHeartbeat = 0;
+    if (millis() - lastHeartbeat >= 60000UL) {
+      lastHeartbeat = millis();
+      RLOGD("SYS", "heartbeat up=%lus heap=%u minHeap=%u rssi=%d state=%d ble=%d mqtt=%d",
+            millis() / 1000UL, ESP.getFreeHeap(), ESP.getMinFreeHeap(),
+            WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0, (int)currentState,
+            (int)bleNow, (int)RemoteLog::connected());
     }
   }
 
@@ -557,7 +619,7 @@ void loop() {
             bleKeyboard.press('k');
             delay(20);
             bleKeyboard.releaseAll();
-            Serial.println("OBS: Sent Cmd+Opt+Shift+K (Play)");
+            RLOGI("OBS", "Sent Cmd+Opt+Shift+K (Play)");
           } else {
             // Knob LEFT → CMD+OPTION+SHIFT+J (Pause)
             bleKeyboard.press(KEY_LEFT_GUI);
@@ -566,7 +628,7 @@ void loop() {
             bleKeyboard.press('j');
             delay(20);
             bleKeyboard.releaseAll();
-            Serial.println("OBS: Sent Cmd+Opt+Shift+J (Pause)");
+            RLOGI("OBS", "Sent Cmd+Opt+Shift+J (Pause)");
           }
         }
         drawOBSScreen(direction);
@@ -632,10 +694,10 @@ void loop() {
 
             if (httpCode > 0 && httpCode < 400) {
               doorLastStatus = 1;
-              Serial.println("DoorLock: Opened");
+              RLOGI("DOOR", "Opened (%d)", httpCode);
             } else {
               doorLastStatus = 2;
-              Serial.printf("DoorLock: Open failed (%d)\n", httpCode);
+              RLOGE("DOOR", "Open failed (%d)", httpCode);
             }
           } else {
             // Knob LEFT → Lock
@@ -646,15 +708,15 @@ void loop() {
 
             if (httpCode > 0 && httpCode < 400) {
               doorLastStatus = -1;
-              Serial.println("DoorLock: Locked");
+              RLOGI("DOOR", "Locked (%d)", httpCode);
             } else {
               doorLastStatus = 2;
-              Serial.printf("DoorLock: Lock failed (%d)\n", httpCode);
+              RLOGE("DOOR", "Lock failed (%d)", httpCode);
             }
           }
         } else {
           doorLastStatus = 2;
-          Serial.println("DoorLock: No WiFi");
+          RLOGW("DOOR", "No WiFi");
         }
 
         drawDoorLockScreen(doorLastStatus);

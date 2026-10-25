@@ -30,20 +30,22 @@ bool connectToWiFi() {
 
   WiFi.begin(); // Uses credentials stored in NVS automatically
 
-  Serial.println("Attempting to connect to saved WiFi...");
+  RLOGI("WIFI", "Attempting to connect to saved WiFi...");
   unsigned long startAttempt = millis();
 
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
     delay(500);
     Serial.print(".");
   }
+  Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConnected Automatically!");
+    RLOGI("WIFI", "Connected automatically to '%s' ip=%s rssi=%d",
+          WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
     return true;
   }
 
-  Serial.println("\nNo saved WiFi found or connection failed.");
+  RLOGW("WIFI", "No saved WiFi found or connection failed (status=%d).", (int)WiFi.status());
   return false;
 }
 
@@ -60,8 +62,7 @@ void setupConfigPortal() {
   WiFi.softAPConfig(apIP, apIP, netMsk);
   WiFi.softAP("ATTENDLE_FACTORY_FIRMWARE");
 
-  Serial.println("AP Started: ATTENDLE_FACTORY_FIRMWARE");
-  Serial.println("Go to http://10.10.10.10 in your browser");
+  RLOGI("WIFI", "Config portal AP started: ATTENDLE_FACTORY_FIRMWARE -> http://10.10.10.10");
 
   // Scan for nearby networks
   int n = WiFi.scanNetworks();
@@ -145,10 +146,10 @@ void setupConfigPortal() {
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("Connected via portal!");
+      RLOGI("WIFI", "Connected via portal to '%s'", ssid.c_str());
       configReceived = true;
     } else {
-      Serial.println("Connection failed. Restarting portal AP...");
+      RLOGW("WIFI", "Portal connection to '%s' failed. Restarting portal AP...", ssid.c_str());
       WiFi.mode(WIFI_AP_STA);
       IPAddress apIP(10, 10, 10, 10);
       IPAddress netMsk(255, 255, 255, 0);
@@ -177,7 +178,7 @@ void stopConfigPortal() {
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.mode(WIFI_STA);   // Keep WiFi, drop AP
   }
-  Serial.println("Config portal closed.");
+  RLOGI("WIFI", "Config portal closed.");
 }
 
 #endif

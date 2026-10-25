@@ -6,18 +6,42 @@
 #include <HTTPUpdate.h>
 #include <EEPROM.h>
 
+// Remote logging over MQTT -> FirmwareManager console (Devices -> Logging).
+// Use RLOGE / RLOGW / RLOGI / RLOGD(tag, fmt, ...) instead of Serial.print.
+// The broker protocol is the same for every device model (topics
+// fm/<mac>/log|status|cmd, client id fm-<mac>). The server labels stored lines
+// with this device's model number from its Devices registration, so nothing
+// model-specific is configured here. Optional local-only Serial prefix:
+// #define RLOG_SERIAL_PREFIX "[KNOB]"
+#include "RemoteLog.h"
+
+// --- FirmwareManager server --------------------------------------------------
+// OTA: try the Render deployment first; if it can't be reached (or the update
+// from it fails) fall back to the local server.
+#define FM_PRIMARY_BASE_URL  "https://firmwaremanager.onrender.com"
+const char* ipServer = "192.168.1.100";
+const String fmFallbackBaseUrl = "http://" + String(ipServer) + ":8080";
+
+const char* FM_VERSION_PATH  = "/api/v1/device/firmware/version?macAddress=";
+const char* FM_FIRMWARE_PATH = "/api/v1/device/firmware?macAddress=";
+
+// Render free instances can take a while to wake up; give the first request time.
+#define OTA_PRIMARY_TIMEOUT_MS  20000
+#define OTA_FALLBACK_TIMEOUT_MS 5000
+
+// Remote logging (MQTT broker built into FirmwareManager)
+// Render:    "wss://firmwaremanager.onrender.com/mqtt"
+// Local dev: "ws://192.168.1.100:8080/mqtt"
+#define MQTT_BROKER_URI "wss://firmwaremanager.onrender.com/mqtt"
+#define MQTT_USERNAME   "firmwaremanager"   // = server MQTT_USERNAME (same for every device model)
+#define MQTT_PASSWORD   "change-me"         // = server MQTT_PASSWORD
+
 #define EEPROM_SIZE 1024
 #define BUZZER_PIN  5
 
 #define STANDBY_TIMEOUT_MS         10000UL  // Standby mode after 10 seconds
 #define CONFIG_PORTAL_TIMEOUT_MS   60000UL  // 60s timeout for WiFi config portal
 #define WIFI_RECONNECT_INTERVAL_MS 10000UL  // 10s between manual WiFi reconnect attempts
-
-const char* ipServer = "192.168.1.100";
-
-const String versionCheckBaseUrl = "http://" + String(ipServer) + ":8080/api/v1/device/firmware/version?macAddress=" ;
-const String firmwareBinBaseUrl = "http://" + String(ipServer) +":8080/api/v1/device/firmware?macAddress=";
-const String baseLoggingUrl = "http://" + String(ipServer) + ":8080/api/v1/device/logs";
 
 
 const unsigned long wakeModeKeyInterval = 2 * 60 * 1000; // 2 minutes

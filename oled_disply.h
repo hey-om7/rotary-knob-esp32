@@ -200,7 +200,7 @@ inline void drawMenu(int yOffset = 0, bool commit = true) {
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(10, 0 + yOffset);
-  display.print("MAIN MENU");
+  display.print("MAIN MENA");
 
   display.drawFastHLine(0, 16 + yOffset, 128, SSD1306_WHITE);
 
@@ -744,7 +744,7 @@ inline void initDisplay(){
   Wire.begin(I2C_SDA, I2C_SCL);
 
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 allocation failed. Check wiring!"));
+    RLOGE("UI", "SSD1306 allocation failed. Check wiring!");
     for(;;); 
   }
   delay(100);

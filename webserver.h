@@ -30,7 +30,9 @@ inline void handleRestart() {
   display.display();
 
   // Give the user a moment to read the screen and the network buffer time to send the response
-  delay(1000); 
+  RLOGW("SYS", "Restart requested via /api/restart");
+  RemoteLog::flush(1000);  // also gives the HTTP response time to go out
+  delay(500);
   
   ESP.restart();
 }
@@ -38,11 +40,9 @@ inline void handleRestart() {
 inline void initWebserver() {
   // Start mDNS
   if (!MDNS.begin(hostname)) {     // hostname = knobcontroller.local
-    Serial.println("Error setting up MDNS!");
+    RLOGE("NET", "Error setting up mDNS!");
   } else {
-    Serial.print("mDNS responder started: http://");
-    Serial.print(hostname);
-    Serial.println(".local");
+    RLOGI("NET", "mDNS responder started: http://%s.local", hostname);
   }
 
   // Override any lingering config portal routes
@@ -63,7 +63,7 @@ inline void initWebserver() {
     stopwatchRunning     = true;
     currentState         = STATE_STOPWATCH;
     server.send(200, "application/json", "{\"status\":\"stopwatch_started\"}");
-    Serial.println("Stopwatch: Started via HTTP");
+    RLOGI("HTTP", "Stopwatch started");
   });
 
   server.on("/api/stopwatch/stop", HTTP_GET, []() {
@@ -75,11 +75,11 @@ inline void initWebserver() {
     lastActivityTime     = millis();
     drawMenu(0, true);
     server.send(200, "application/json", "{\"status\":\"stopwatch_stopped\"}");
-    Serial.println("Stopwatch: Stopped via HTTP, back to menu");
+    RLOGI("HTTP", "Stopwatch stopped, back to menu");
   });
 
   server.begin();
-  Serial.println("HTTP server started.");
+  RLOGI("HTTP", "HTTP server started.");
 }
 
 #endif

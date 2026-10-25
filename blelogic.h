@@ -29,8 +29,7 @@ void handleWakeModeLogic() {
       char randomLetter = generateRandomLetter();
       
       bleKeyboard.write(randomLetter);
-      Serial.print("Sent key: ");
-      Serial.println(randomLetter);
+      RLOGD("BLE", "Wake mode: sent key '%c'", randomLetter);
       
       lastKeySendTime = millis();
     }
@@ -40,14 +39,14 @@ void handleWakeModeLogic() {
 void sendVolumeUp() {
   if (bleKeyboard.isConnected()) {
     bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
-    Serial.println("Volume Up");
+    RLOGD("BLE", "Volume Up");
   }
 }
 
 void sendVolumeDown() {
   if (bleKeyboard.isConnected()) {
     bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN);
-    Serial.println("Volume Down");
+    RLOGD("BLE", "Volume Down");
   }
 }
 
