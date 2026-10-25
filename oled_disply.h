@@ -200,7 +200,7 @@ inline void drawMenu(int yOffset = 0, bool commit = true) {
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(10, 0 + yOffset);
-  display.print("MAIN MENA");
+  display.print("MAIN MENU");
 
   display.drawFastHLine(0, 16 + yOffset, 128, SSD1306_WHITE);
 
