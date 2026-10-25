@@ -294,7 +294,8 @@ void loop() {
       bleWasConnected = bleNow;
     }
 
-    // Only reaches the console when Devices -> Logging sets remote=debug
+    // Reaches the console only when Debug is ticked for the remote channel
+    // (Devices -> Logging). Always shown on USB serial by default.
     static unsigned long lastHeartbeat = 0;
     if (millis() - lastHeartbeat >= 60000UL) {
       lastHeartbeat = millis();

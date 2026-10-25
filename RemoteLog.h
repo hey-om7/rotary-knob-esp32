@@ -2,8 +2,8 @@
  * RemoteLog.h — Knob Controller remote logging for FirmwareManager
  * (MQTT over WebSocket).
  *
- * Based on the FirmwareManager ESP32 example client (RemoteLogExample).
- * Additions for this sketch:
+ * Synced with examples/esp32/RemoteLogExample/RemoteLog.h (per-channel level
+ * sets). Additions for this sketch:
  *   - init(): call at the very top of setup() so lines logged before Wi-Fi is
  *     up (boot, Wi-Fi portal, ...) are buffered and sent once MQTT connects.
  *   - flush(): push buffered lines out before ESP.restart() (OTA, /api/restart).
@@ -14,16 +14,22 @@
  *   - reports fw + levels on          fm/<mac>/status  (retained; LWT = offline)
  *   - applies log-level commands from fm/<mac>/cmd     (retained, from the console)
  *
+ * Levels are per channel and independent: the console can switch any mix of
+ * error / warn / info / debug on for remote and for USB serial. Defaults:
+ * serial = all levels, remote = error + warn + info.
+ *
  * <mac> is the Wi-Fi STA MAC as 12 lowercase hex digits; client id "fm-<mac>".
- * The protocol is model-agnostic: the device must be registered in the
- * console (Devices) with that MAC, and the server labels stored lines with
- * the registered model number ("###Logged msg: [<MODEL>] [I][TAG] text").
+ * The device must be registered in the console (Devices) with that MAC.
+ * Works for any model: the server labels each line with the device's model
+ * number ("###Logged msg: [<MODEL>] [I][TAG] text").
  *
  * Transport: ESP-IDF's built-in MQTT client (esp-mqtt) — supports wss://,
  * reconnects on its own and runs in its own task. No extra library needed.
+ * Works on arduino-esp32 core 2.0.x (ESP-IDF 4.4) and 3.x (ESP-IDF 5.x).
  *
  *   Render / HTTPS host : "wss://<your-service>.onrender.com/mqtt"
  *   Local dev           : "ws://<pc-ip>:8080/mqtt"
+ *   Self-hosted TCP     : "mqtt://<host>:1883"
  */
 #pragma once
 
@@ -35,12 +41,9 @@
 
 // Declared directly: WiFiClientSecure ships its own "esp_crt_bundle.h" that
 // can shadow ESP-IDF's. This symbol is the IDF one, with the full Mozilla CA
-// bundle compiled into the core (verifies Render's certificate without a PEM).
+// bundle compiled into the core (verifies Render's / Let's Encrypt / Google
+// Trust Services certificates without pasting a PEM).
 extern "C" esp_err_t esp_crt_bundle_attach(void *conf);
-
-// --- Broker protocol (fixed by the FirmwareManager server, same for all models)
-#define RLOG_TOPIC_ROOT    "fm"   // topics: fm/<mac>/{log,status,cmd}
-#define RLOG_CLIENT_PREFIX "fm-"  // MQTT client id: fm-<mac>
 
 // Optional local-only Serial prefix, e.g. "[KNOB]". Never sent to the server.
 #ifndef RLOG_SERIAL_PREFIX
@@ -51,17 +54,25 @@ namespace RemoteLog {
 
 enum Level : uint8_t { OFF = 0, ERROR = 1, WARN = 2, INFO = 3, DEBUG = 4 };
 
+/**
+ * Each channel (remote, serial) has a SET of enabled levels, as a bitmask —
+ * any combination, e.g. only ERROR + DEBUG. 0 = channel off.
+ */
+static constexpr uint8_t bitOf(Level l) { return (l >= ERROR && l <= DEBUG) ? static_cast<uint8_t>(1u << (l - 1)) : 0; }
+static constexpr uint8_t kAllLevels = 0x0F;
+
 // ----------------------------------------------------------------------------
 // Tunables
 // ----------------------------------------------------------------------------
 static constexpr size_t kMaxLine = 256;          // server accepts up to 1024
 static constexpr size_t kBatchBytes = 1024;      // one MQTT publish per batch
 static constexpr uint32_t kFlushMs = 2000;       // max delay before a batch is sent
-static constexpr Level kDefaultRemote = INFO;
-static constexpr Level kDefaultSerial = INFO;
+static constexpr uint8_t kDefaultRemote = 0x07;  // error + warn + info
+static constexpr uint8_t kDefaultSerial = kAllLevels;  // USB serial: everything
 
 // ----------------------------------------------------------------------------
-// State (one instance program-wide; C++11-safe for core 2.x)
+// State. Header-only and C++11-safe (core 2.x builds with gnu++11): a
+// function-local static in an inline function is one instance program-wide.
 // ----------------------------------------------------------------------------
 struct State {
   esp_mqtt_client_handle_t client = nullptr;
@@ -69,8 +80,8 @@ struct State {
   volatile bool paused = false;
   volatile bool force = false;    // flush(): send now, ignore batching delay
   volatile bool sending = false;  // a batch was taken and is being published
-  volatile Level remote = kDefaultRemote;
-  volatile Level serial = kDefaultSerial;
+  volatile uint8_t remote = kDefaultRemote;  // level bitmask
+  volatile uint8_t serial = kDefaultSerial;  // level bitmask
   SemaphoreHandle_t lock = nullptr;
   TaskHandle_t task = nullptr;
   char buf[kBatchBytes + 1];
@@ -78,8 +89,8 @@ struct State {
   uint32_t firstAt = 0;  // millis() of the oldest buffered line
   uint32_t dropped = 0;  // lines discarded while offline / overflowing
   char id[13];
-  char clientId[48];
-  char tLog[64], tStatus[64], tCmd[64];
+  char clientId[16];
+  char tLog[24], tStatus[24], tCmd[24];
   char fw[33];
 };
 inline State &S() {
@@ -104,41 +115,81 @@ inline char levelLetter(Level l) {
     default: return 'I';
   }
 }
-inline Level clampLevel(uint8_t v) { return static_cast<Level>(v > DEBUG ? static_cast<uint8_t>(INFO) : v); }
 
 // ----------------------------------------------------------------------------
 // Internals
 // ----------------------------------------------------------------------------
 namespace detail {
 
-/** Find "key":"<level>" in a tiny flat JSON object. */
-inline bool jsonLevel(const char *json, const char *key, Level &out) {
+/** Match a level name at p (followed by a closing quote); 0 if none. */
+inline uint8_t nameBit(const char *p) {
+  for (uint8_t i = ERROR; i <= DEBUG; ++i) {
+    const char *name = levelName(static_cast<Level>(i));
+    size_t n = strlen(name);
+    if (strncmp(p, name, n) == 0 && p[n] == '"') return bitOf(static_cast<Level>(i));
+  }
+  return 0;
+}
+
+/**
+ * Read "key" from a tiny flat JSON object as a level bitmask:
+ *   "key":["error","debug"]  -> any combination ([] = off)
+ *   "key":"info"             -> legacy threshold (error+warn+info)
+ * Returns false if the key is missing or malformed.
+ */
+inline bool jsonLevels(const char *json, const char *key, uint8_t &out) {
   char pat[16];
   snprintf(pat, sizeof pat, "\"%s\"", key);
   const char *p = strstr(json, pat);
   if (!p) return false;
   p = strchr(p + strlen(pat), ':');
   if (!p) return false;
-  p = strchr(p, '"');
-  if (!p) return false;
   ++p;
-  for (uint8_t i = 0; i <= DEBUG; ++i) {
-    const char *name = levelName(static_cast<Level>(i));
-    size_t n = strlen(name);
-    if (strncmp(p, name, n) == 0 && p[n] == '"') {
-      out = static_cast<Level>(i);
+  while (*p == ' ') ++p;
+  if (*p == '[') {
+    const char *end = strchr(p, ']');
+    if (!end) return false;
+    uint8_t mask = 0;
+    for (const char *q = strchr(p, '"'); q && q < end; q = strchr(q + 1, '"')) {
+      mask |= nameBit(q + 1);
+      q = strchr(q + 1, '"');  // skip to this name's closing quote
+      if (!q) break;
+    }
+    out = mask;
+    return true;
+  }
+  if (*p == '"') {
+    ++p;
+    if (strncmp(p, "off\"", 4) == 0) {
+      out = 0;
       return true;
     }
+    uint8_t b = nameBit(p);
+    if (!b) return false;
+    out = static_cast<uint8_t>((b << 1) - 1);  // threshold: this level and every more severe one
+    return true;
   }
   return false;
+}
+
+/** Bitmask -> JSON array, e.g. ["error","info"]. */
+inline int levelsJson(char *out, size_t cap, uint8_t mask) {
+  int n = snprintf(out, cap, "[");
+  for (uint8_t i = ERROR; i <= DEBUG; ++i) {
+    if (!(mask & bitOf(static_cast<Level>(i)))) continue;
+    n += snprintf(out + n, cap - n, "%s\"%s\"", n > 1 ? "," : "", levelName(static_cast<Level>(i)));
+  }
+  n += snprintf(out + n, cap - n, "]");
+  return n;
 }
 
 /** Retained status: the server shows these as the device's applied levels. */
 inline void publishStatus() {
   if (!S().client) return;
-  char json[128];
-  int n = snprintf(json, sizeof json, "{\"state\":\"online\",\"fw\":\"%s\",\"remote\":\"%s\",\"serial\":\"%s\"}", S().fw,
-                   levelName(S().remote), levelName(S().serial));
+  char r[48], s[48], json[160];
+  levelsJson(r, sizeof r, S().remote);
+  levelsJson(s, sizeof s, S().serial);
+  int n = snprintf(json, sizeof json, "{\"state\":\"online\",\"fw\":\"%s\",\"remote\":%s,\"serial\":%s}", S().fw, r, s);
   // enqueue = non-blocking, safe from any task including the MQTT event handler.
   esp_mqtt_client_enqueue(S().client, S().tStatus, json, n, 1, 1, true);
 }
@@ -146,28 +197,30 @@ inline void publishStatus() {
 inline void saveLevels() {
   Preferences p;
   if (p.begin("rlog", false)) {
-    p.putUChar("remote", S().remote);
-    p.putUChar("serial", S().serial);
+    p.putUChar("rmask", S().remote);
+    p.putUChar("smask", S().serial);
     p.end();
   }
 }
 
 inline void loadLevels() {
   Preferences p;
-  // Read-write so the namespace is created on first boot (read-only open of a
-  // missing namespace fails and logs an NVS error).
+  // Read-write so the namespace is created on first boot (a read-only open of
+  // a missing namespace fails and prints an NVS error on every boot).
   if (p.begin("rlog", false)) {
-    S().remote = clampLevel(p.getUChar("remote", kDefaultRemote));
-    S().serial = clampLevel(p.getUChar("serial", kDefaultSerial));
+    S().remote = p.getUChar("rmask", kDefaultRemote) & kAllLevels;
+    S().serial = p.getUChar("smask", kDefaultSerial) & kAllLevels;
     p.end();
   }
 }
 
-/** {"remote":"debug","serial":"warn"} — keys optional. Empty = cleared, ignore. */
+/** {"remote":["error","warn"],"serial":[]} — keys optional. Empty = cleared, ignore. */
 inline void applyCommand(const char *json) {
-  Level r = S().remote, s = S().serial;
-  bool any = jsonLevel(json, "remote", r) | jsonLevel(json, "serial", s);
-  if (!any) return;
+  uint8_t r = S().remote, s = S().serial;
+  // Parse both keys (no short-circuit): either one may be present.
+  const bool hasRemote = jsonLevels(json, "remote", r);
+  const bool hasSerial = jsonLevels(json, "serial", s);
+  if (!hasRemote && !hasSerial) return;
   bool changed = (r != S().remote) || (s != S().serial);
   S().remote = r;
   S().serial = s;
@@ -298,10 +351,10 @@ inline bool begin(const char *uri, const char *username, const char *password, c
   uint8_t mac[6];
   WiFi.macAddress(mac);
   snprintf(S().id, sizeof S().id, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  snprintf(S().clientId, sizeof S().clientId, RLOG_CLIENT_PREFIX "%s", S().id);
-  snprintf(S().tLog, sizeof S().tLog, RLOG_TOPIC_ROOT "/%s/log", S().id);
-  snprintf(S().tStatus, sizeof S().tStatus, RLOG_TOPIC_ROOT "/%s/status", S().id);
-  snprintf(S().tCmd, sizeof S().tCmd, RLOG_TOPIC_ROOT "/%s/cmd", S().id);
+  snprintf(S().clientId, sizeof S().clientId, "fm-%s", S().id);
+  snprintf(S().tLog, sizeof S().tLog, "fm/%s/log", S().id);
+  snprintf(S().tStatus, sizeof S().tStatus, "fm/%s/status", S().id);
+  snprintf(S().tCmd, sizeof S().tCmd, "fm/%s/cmd", S().id);
   snprintf(S().fw, sizeof S().fw, "%s", fwVersion ? fwVersion : "");
 
   static const char kOffline[] = "{\"state\":\"offline\"}";
@@ -388,15 +441,17 @@ inline bool flush(uint32_t timeoutMs = 3000) {
 }
 
 inline bool connected() { return S().connected; }
-inline Level remoteLevel() { return S().remote; }
-inline Level serialLevel() { return S().serial; }
+/** Enabled levels as bitmasks (test with RemoteLog::bitOf(RemoteLog::INFO)). */
+inline uint8_t remoteLevels() { return S().remote; }
+inline uint8_t serialLevels() { return S().serial; }
 inline const char *deviceId() { return S().id; }
 
 /** Core logger. Prefer the RLOGx macros below. */
 inline void logv(Level level, const char *tag, const char *fmt, va_list ap) {
-  if (level == OFF || level > DEBUG) return;
-  const bool toSerial = level <= S().serial;
-  const bool toRemote = level <= S().remote && S().lock;  // buffered even before begin()
+  const uint8_t bit = bitOf(level);
+  if (!bit) return;
+  const bool toSerial = (S().serial & bit) != 0;
+  const bool toRemote = (S().remote & bit) != 0 && S().lock;  // buffered even before begin()
   if (!toSerial && !toRemote) return;
 
   char line[kMaxLine];
